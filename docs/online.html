@@ -611,9 +611,11 @@ async function burnCaptions() {
         burnLabel.textContent = 'Encoding... ' + Math.round(progress * 100) + '%';
       });
       const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+      const ffURL   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm';
       await ff.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        coreURL:   await toBlobURL(`${baseURL}/ffmpeg-core.js`,  'text/javascript'),
+        wasmURL:   await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        workerURL: await toBlobURL(`${ffURL}/worker.js`,          'text/javascript'),
       });
       window.__ffmpeg = ff;
       window.__fetchFile = fetchFile;
