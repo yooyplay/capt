@@ -175,7 +175,12 @@
     <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
       <button class="btn btn-primary" onclick="downloadSRT()" style="font-size:13px;padding:10px 20px;">Download .srt</button>
       <button class="btn btn-secondary" onclick="downloadTXT()" style="font-size:13px;padding:10px 20px;">Download .txt</button>
+      <button class="btn btn-secondary" id="burnBtn" onclick="burnCaptions()" style="font-size:13px;padding:10px 20px;">Download video with captions</button>
       <button class="btn btn-secondary" onclick="resetTool()" style="font-size:13px;padding:10px 20px;">Caption another</button>
+    </div>
+    <div id="burnWrap" style="display:none;margin-top:12px;">
+      <div class="progress-label" id="burnLabel">Burning captions into video...</div>
+      <div class="progress-bar-bg"><div class="progress-bar" id="burnBar"></div></div>
     </div>
   </div>
 
@@ -199,6 +204,7 @@ let currentMode   = 'auto';
 let transcript    = null;
 let segments      = null;
 let currentFileName = 'audio';
+let currentVideoFile = null; // kept for burn-captions
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function selectModel(el) {
@@ -233,6 +239,7 @@ dropZone.addEventListener('drop', e => {
 // ── Main handler ──────────────────────────────────────────────────────────────
 async function handleFile(file) {
   if (!file) return;
+  currentVideoFile = file;
   currentFileName = file.name.replace(/\.[^.]+$/, '');
   document.getElementById('dropTitle').textContent = file.name;
   document.getElementById('dropSub').textContent = 'Processing...';
@@ -576,6 +583,93 @@ function downloadTXT() {
   a.href = URL.createObjectURL(new Blob([transcript], { type: 'text/plain' }));
   a.download = currentFileName + '.txt';
   a.click();
+}
+
+// ── Burn captions into video (ffmpeg.wasm) ────────────────────────────────────
+async function burnCaptions() {
+  if (!segments || !segments.length || !currentVideoFile) return;
+
+  const btn = document.getElementById('burnBtn');
+  const burnWrap = document.getElementById('burnWrap');
+  const burnBar  = document.getElementById('burnBar');
+  const burnLabel = document.getElementById('burnLabel');
+
+  btn.disabled = true;
+  btn.textContent = 'Burning...';
+  burnWrap.style.display = 'block';
+  burnBar.style.width = '5%';
+  burnLabel.textContent = 'Loading FFmpeg...';
+
+  try {
+    // Lazy-load ffmpeg.wasm
+    if (!window.__ffmpeg) {
+      const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { fetchFile, toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+      const ff = new FFmpeg();
+      ff.on('progress', ({ progress }) => {
+        burnBar.style.width = (10 + progress * 88) + '%';
+        burnLabel.textContent = 'Encoding... ' + Math.round(progress * 100) + '%';
+      });
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+      await ff.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
+      window.__ffmpeg = ff;
+      window.__fetchFile = fetchFile;
+    }
+
+    const ff = window.__ffmpeg;
+    const fetchFile = window.__fetchFile;
+
+    burnBar.style.width = '10%';
+    burnLabel.textContent = 'Preparing files...';
+
+    // Build SRT
+    let srt = '';
+    segments.forEach((seg, i) => {
+      const [start, end] = seg.timestamp || [0, 1];
+      srt += (i+1) + '\n' + toSRTTime(start) + ' --> ' + toSRTTime(end) + '\n' + seg.text.trim() + '\n\n';
+    });
+
+    const ext = currentVideoFile.name.split('.').pop() || 'mp4';
+    await ff.writeFile('input.' + ext, await fetchFile(currentVideoFile));
+    await ff.writeFile('subs.srt', srt);
+
+    burnBar.style.width = '15%';
+    burnLabel.textContent = 'Burning captions...';
+
+    // Burn subtitles using subtitles filter
+    await ff.exec([
+      '-i', 'input.' + ext,
+      '-vf', 'subtitles=subs.srt:force_style=\'FontSize=22,PrimaryColour=&Hffffff,OutlineColour=&H000000,Outline=1,Shadow=0\'',
+      '-c:a', 'copy',
+      'output.' + ext
+    ]);
+
+    burnBar.style.width = '100%';
+    burnLabel.textContent = 'Done!';
+
+    const data = await ff.readFile('output.' + ext);
+    const blob = new Blob([data.buffer], { type: 'video/' + (ext === 'mp4' ? 'mp4' : ext) });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = currentFileName + '_captioned.' + ext;
+    a.click();
+
+    // Cleanup
+    await ff.deleteFile('input.' + ext);
+    await ff.deleteFile('output.' + ext);
+    await ff.deleteFile('subs.srt');
+
+  } catch (err) {
+    burnLabel.textContent = 'Error: ' + err.message;
+    console.error(err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Download video with captions';
+    setTimeout(() => { burnWrap.style.display = 'none'; burnBar.style.width = '0%'; }, 3000);
+  }
 }
 
 function resetTool() {
