@@ -1,0 +1,17 @@
+# Build artifacts
+.build/
+*.app/
+*.dmg
+
+# Source (keep private)
+Sources/
+Package.swift
+Package.resolved
+build-app.sh
+make-icon.swift
+make-dmg-bg.swift
+release.sh
+caption_video.py
+
+# macOS
+.DS_Store
