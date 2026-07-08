@@ -7,6 +7,16 @@
   <meta name="description" content="Add captions to any video directly in your browser using Whisper AI. No upload, 100% private." />
   <link rel="icon" type="image/png" href="icon.png" />
   <link rel="stylesheet" href="style.css" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-9WXXSWRCKX"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-9WXXSWRCKX');
+  </script>
+
+  <!-- Google AdSense -->
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3979207653094537" crossorigin="anonymous"></script>
   <script>
     if ("serviceWorker" in navigator) {
@@ -106,7 +116,7 @@
 
   <!-- Whisper model picker (auto mode only) -->
   <div id="modelPickerWrap">
-    <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;">Whisper model — larger is more accurate but slower to load</p>
+    <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;">Whisper model. Larger is more accurate but slower to load</p>
     <div class="model-picker" id="modelPicker">
       <div class="model-btn" data-model="Xenova/whisper-tiny" onclick="selectModel(this)">
         <span class="m-label">Tiny</span><span class="m-sub">Fastest</span>
@@ -204,7 +214,7 @@ function selectMode(mode) {
   document.getElementById('modelPickerWrap').style.display = mode === 'auto' ? '' : 'none';
   document.getElementById('scriptBox').classList.toggle('visible', true);
   document.getElementById('scriptLabel').textContent =
-    mode === 'align' ? 'Your script (required)' : 'Script — optional hint for Whisper';
+    mode === 'align' ? 'Your script (required)' : 'Script: optional hint for Whisper';
   document.getElementById('alignNote').style.display = mode === 'align' ? 'flex' : 'none';
 }
 
@@ -330,7 +340,7 @@ function scriptToTokenIds(text) {
 
 /**
  * Band-limited Viterbi CTC forced alignment.
- * Memory: O(tokens) — only keeps two rows of the DP table.
+ * Memory: O(tokens): keeps only two rows of the DP table.
  * Tracks the "peak probability frame" for each CTC state.
  *
  * @param {Float32Array} logProbs  shape [T * V], log-softmax
