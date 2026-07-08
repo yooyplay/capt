@@ -16,11 +16,15 @@
     }
   </script>
   <script type="module">
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
+    import {
+      pipeline, env,
+      AutoProcessor, Wav2Vec2ForCTC
+    } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js';
     env.allowLocalModels = false;
-    window.__transformers = { pipeline, env };
+    window.__transformers = { pipeline, env, AutoProcessor, Wav2Vec2ForCTC };
   </script>
   <style>
+    /* ── Model picker ───────────────────────────────────────────── */
     .model-picker { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; }
     .model-btn {
       flex:1; min-width:80px; background:var(--surface); border:1.5px solid var(--border);
@@ -30,10 +34,43 @@
     .model-btn .m-label { font-weight:700; font-size:14px; display:block; }
     .model-btn .m-sub { color:var(--muted); font-size:10px; margin-top:2px; display:block; }
     .model-btn.active { border-color:var(--a2); background:rgba(168,85,247,0.1); color:var(--a2); }
+
+    /* ── Mode tabs ──────────────────────────────────────────────── */
+    .mode-tabs { display:flex; gap:8px; margin-bottom:20px; }
+    .mode-tab {
+      flex:1; padding:12px 10px; border-radius:10px; text-align:center;
+      cursor:pointer; border:1.5px solid var(--border); background:var(--surface);
+      transition:border-color .15s, background .15s;
+    }
+    .mode-tab .t-label { font-weight:700; font-size:13px; display:block; }
+    .mode-tab .t-sub { color:var(--muted); font-size:10px; margin-top:3px; display:block; }
+    .mode-tab.active { border-color:var(--a2); background:rgba(168,85,247,0.1); color:var(--a2); }
+    .mode-tab.active .t-sub { color:rgba(168,85,247,0.7); }
+
+    /* ── Script box ─────────────────────────────────────────────── */
+    .script-box {
+      display:none; background:var(--surface); border:1px solid var(--border);
+      border-radius:var(--radius); padding:16px; margin-bottom:20px;
+    }
+    .script-box.visible { display:block; }
+    .script-box label { font-size:.82rem; color:var(--muted); display:block; margin-bottom:8px; }
+    .script-box textarea {
+      width:100%; min-height:110px; background:rgba(0,0,0,0.25);
+      border:1px solid var(--border); border-radius:8px; padding:10px 12px;
+      font-size:.85rem; color:var(--text); resize:vertical; font-family:inherit;
+    }
+    .script-box textarea::placeholder { color:var(--muted); }
+    .align-note {
+      margin-top:10px; font-size:.78rem; color:var(--muted);
+      display:flex; align-items:flex-start; gap:6px;
+    }
+    .align-note span { flex-shrink:0; }
+
+    /* ── Log box ────────────────────────────────────────────────── */
     .log-box {
       background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08);
       border-radius:8px; padding:12px 14px; font-family:'SF Mono',Menlo,monospace;
-      font-size:11px; color:#a5f3a5; min-height:60px; max-height:120px;
+      font-size:11px; color:#a5f3a5; min-height:60px; max-height:140px;
       overflow-y:auto; margin-top:16px; white-space:pre-wrap; display:none;
     }
     .log-box.visible { display:block; }
@@ -45,8 +82,8 @@
   <ins class="adsbygoogle" style="display:block"
        data-ad-client="ca-pub-3979207653094537"
        data-ad-slot="4333611181"
-       data-ad-format="auto"
-       data-full-width-responsive="true"></ins>
+       data-ad-format="horizontal"
+       data-full-width-responsive="false"></ins>
   <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
 </div>
 
@@ -67,17 +104,42 @@
   <h1>Add Captions in Your Browser</h1>
   <p style="color:var(--muted);margin-bottom:32px;">Whisper runs locally via WebAssembly. Your video never leaves your device.</p>
 
-  <!-- Model picker -->
-  <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;">Whisper model — larger is more accurate but slower to load</p>
-  <div class="model-picker" id="modelPicker">
-    <div class="model-btn active" data-model="Xenova/whisper-tiny" onclick="selectModel(this)">
-      <span class="m-label">Tiny</span><span class="m-sub">Fastest</span>
+  <!-- Whisper model picker (auto mode only) -->
+  <div id="modelPickerWrap">
+    <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;">Whisper model — larger is more accurate but slower to load</p>
+    <div class="model-picker" id="modelPicker">
+      <div class="model-btn" data-model="Xenova/whisper-tiny" onclick="selectModel(this)">
+        <span class="m-label">Tiny</span><span class="m-sub">Fastest</span>
+      </div>
+      <div class="model-btn active" data-model="Xenova/whisper-base" onclick="selectModel(this)">
+        <span class="m-label">Base</span><span class="m-sub">Fast</span>
+      </div>
+      <div class="model-btn" data-model="Xenova/whisper-small" onclick="selectModel(this)">
+        <span class="m-label">Small</span><span class="m-sub">Balanced</span>
+      </div>
     </div>
-    <div class="model-btn" data-model="Xenova/whisper-base" onclick="selectModel(this)">
-      <span class="m-label">Base</span><span class="m-sub">Fast</span>
+  </div>
+
+  <!-- Mode tabs -->
+  <p style="font-size:.82rem;color:var(--muted);margin-bottom:10px;">Mode</p>
+  <div class="mode-tabs">
+    <div class="mode-tab active" id="tabAuto" onclick="selectMode('auto')">
+      <span class="t-label">Auto</span>
+      <span class="t-sub">Whisper detects speech</span>
     </div>
-    <div class="model-btn" data-model="Xenova/whisper-small" onclick="selectModel(this)">
-      <span class="m-label">Small</span><span class="m-sub">Balanced</span>
+    <div class="mode-tab" id="tabAlign" onclick="selectMode('align')">
+      <span class="t-label">Force Align</span>
+      <span class="t-sub">Align your exact script to audio</span>
+    </div>
+  </div>
+
+  <!-- Script input (shown in both modes, required for align) -->
+  <div class="script-box" id="scriptBox">
+    <label id="scriptLabel">Paste your script below</label>
+    <textarea id="scriptInput" placeholder="Type or paste your script here..."></textarea>
+    <div class="align-note" id="alignNote" style="display:none;">
+      <span>⚡</span>
+      <span>Force Align downloads a wav2vec2 model (~95 MB) and maps every word of your exact script to its precise timestamp in the audio. English only.</span>
     </div>
   </div>
 
@@ -91,7 +153,7 @@
 
   <!-- Progress -->
   <div class="progress-wrap" id="progressWrap">
-    <div class="progress-label" id="progressLabel">Loading Whisper model...</div>
+    <div class="progress-label" id="progressLabel">Loading...</div>
     <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
     <div class="log-box" id="logBox"></div>
   </div>
@@ -105,12 +167,11 @@
       <button class="btn btn-secondary" onclick="downloadTXT()" style="font-size:13px;padding:10px 20px;">Download .txt</button>
       <button class="btn btn-secondary" onclick="resetTool()" style="font-size:13px;padding:10px 20px;">Caption another</button>
     </div>
-    <p style="font-size:.78rem;color:var(--muted);margin-top:10px;">Note: The browser tool outputs SRT subtitles. To burn captions into the video, use the <a href="download.html">Mac app</a>.</p>
   </div>
 
   <div class="private-note" style="margin-top:24px;">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-    Your file never leaves your device. Whisper runs entirely in your browser.
+    Your file never leaves your device. All processing runs entirely in your browser.
   </div>
 
 </div>
@@ -119,23 +180,39 @@
   <p>Capt is open source · <a href="https://github.com/yooyplay/capt" target="_blank">View on GitHub</a></p>
 </footer>
 
-<a href="https://buymeacoffee.com/yooyplay" target="_blank" class="coffee-widget">
-  <span class="emoji">☕</span>
-  <span>Enjoy this free tool? Buy me a coffee</span>
-</a>
+<script type='text/javascript' src='https://storage.ko-fi.com/cdn/widget/Widget_2.js'></script>
+<script type='text/javascript'>kofiwidget2.init('Support me on Ko-fi', '#72a4f2', 'W8T622UOKJ');kofiwidget2.draw();</script>
 
 <script>
-let selectedModel = 'Xenova/whisper-tiny';
-let transcript = null;
-let segments = null;
+// ── State ─────────────────────────────────────────────────────────────────────
+let selectedModel = 'Xenova/whisper-base';
+let currentMode   = 'auto';
+let transcript    = null;
+let segments      = null;
 let currentFileName = 'audio';
 
+// ── UI helpers ────────────────────────────────────────────────────────────────
 function selectModel(el) {
   document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   selectedModel = el.dataset.model;
 }
 
+function selectMode(mode) {
+  currentMode = mode;
+  document.getElementById('tabAuto').classList.toggle('active',  mode === 'auto');
+  document.getElementById('tabAlign').classList.toggle('active', mode === 'align');
+  document.getElementById('modelPickerWrap').style.display = mode === 'auto' ? '' : 'none';
+  document.getElementById('scriptBox').classList.toggle('visible', true);
+  document.getElementById('scriptLabel').textContent =
+    mode === 'align' ? 'Your script (required)' : 'Script — optional hint for Whisper';
+  document.getElementById('alignNote').style.display = mode === 'align' ? 'flex' : 'none';
+}
+
+// Show script box by default (optional in auto mode)
+document.getElementById('scriptBox').classList.add('visible');
+
+// ── Drop zone ─────────────────────────────────────────────────────────────────
 const dropZone = document.getElementById('dropZone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -144,6 +221,7 @@ dropZone.addEventListener('drop', e => {
   if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
 
+// ── Main handler ──────────────────────────────────────────────────────────────
 async function handleFile(file) {
   if (!file) return;
   currentFileName = file.name.replace(/\.[^.]+$/, '');
@@ -151,80 +229,334 @@ async function handleFile(file) {
   document.getElementById('dropSub').textContent = 'Processing...';
 
   const progressWrap = document.getElementById('progressWrap');
-  const progressBar = document.getElementById('progressBar');
+  const progressBar  = document.getElementById('progressBar');
   const progressLabel = document.getElementById('progressLabel');
   const logBox = document.getElementById('logBox');
   progressWrap.classList.add('visible');
   logBox.classList.add('visible');
+  document.getElementById('resultWrap').style.display = 'none';
 
   function log(msg) {
     logBox.textContent += msg + '\n';
     logBox.scrollTop = logBox.scrollHeight;
   }
+  function setProgress(pct, label) {
+    progressBar.style.width = pct + '%';
+    progressLabel.textContent = label;
+  }
+
+  const userScript = document.getElementById('scriptInput').value.trim();
 
   try {
-    log('Loading Whisper model: ' + selectedModel);
-    progressLabel.textContent = 'Loading model (first time may take a moment)...';
-    progressBar.style.width = '10%';
-
-    const { pipeline } = window.__transformers;
-    const transcriber = await pipeline('automatic-speech-recognition', selectedModel, {
-      progress_callback: (p) => {
-        if (p.status === 'downloading') {
-          const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 80) : 20;
-          progressBar.style.width = pct + '%';
-          progressLabel.textContent = 'Downloading model... ' + pct + '%';
-        }
-      }
-    });
-
-    log('Model loaded. Reading audio...');
-    progressLabel.textContent = 'Transcribing...';
-    progressBar.style.width = '85%';
-
+    // Decode audio to 16kHz mono float32
+    log('Reading audio...');
     const arrayBuffer = await file.arrayBuffer();
     const audioCtx = new AudioContext({ sampleRate: 16000 });
     const decoded = await audioCtx.decodeAudioData(arrayBuffer);
     const audio = decoded.getChannelData(0);
+    log(`Audio: ${(audio.length / 16000).toFixed(1)}s`);
 
-    log('Running Whisper...');
-    const result = await transcriber(audio, {
-      return_timestamps: true,
-      chunk_length_s: 30,
-      stride_length_s: 5,
-    });
-
-    progressBar.style.width = '100%';
-    progressLabel.textContent = 'Done!';
-    log('Transcription complete.');
-
-    transcript = result.text;
-    segments = result.chunks || [];
-
-    document.getElementById('transcriptBox').textContent = transcript;
-    document.getElementById('resultWrap').style.display = 'block';
-    progressWrap.classList.remove('visible');
+    if (currentMode === 'align') {
+      if (!userScript) {
+        log('Error: Force Align mode requires a script.');
+        setProgress(0, 'Please paste your script above, then try again.');
+        return;
+      }
+      await runForceAlign(audio, userScript, log, setProgress);
+    } else {
+      await runWhisper(audio, userScript, log, setProgress);
+    }
 
   } catch (err) {
     log('Error: ' + err.message);
-    progressLabel.textContent = 'Something went wrong. Try a smaller model.';
+    console.error(err);
+    setProgress(0, 'Something went wrong. Check the console for details.');
   }
 }
 
+// ── Mode 1: Whisper auto-transcription ────────────────────────────────────────
+async function runWhisper(audio, scriptHint, log, setProgress) {
+  const { pipeline } = window.__transformers;
+
+  log('Loading Whisper model: ' + selectedModel);
+  setProgress(5, 'Loading Whisper model...');
+
+  const transcriber = await pipeline('automatic-speech-recognition', selectedModel, {
+    progress_callback: (p) => {
+      if (p.status === 'downloading') {
+        const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 60) : 10;
+        setProgress(pct, 'Downloading model... ' + pct + '%');
+      }
+    }
+  });
+
+  setProgress(65, 'Transcribing...');
+  log('Running Whisper...' + (scriptHint ? ' (script hint active)' : ''));
+
+  const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 };
+  if (scriptHint) opts.initial_prompt = scriptHint.split(/[.!?]/)[0].trim() + '.';
+
+  const result = await transcriber(audio, opts);
+
+  setProgress(100, 'Done!');
+  log('Transcription complete.');
+
+  transcript = result.text;
+  segments   = result.chunks || [];
+  showResult(transcript);
+}
+
+// ── Mode 2: CTC forced alignment ─────────────────────────────────────────────
+
+// Wav2Vec2-base-960h vocabulary (English)
+const W2V_VOCAB  = '<pad>,<s>,</s>,<unk>,|,E,T,A,O,I,N,S,H,R,D,L,U,M,W,C,F,G,Y,P,B,V,K,\',X,J,Q,Z'.split(',');
+const W2V_C2ID   = Object.fromEntries(W2V_VOCAB.map((c, i) => [c, i]));
+const BLANK_ID   = 0;   // <pad>
+const SEP_ID     = 4;   // | (word boundary)
+const W2V_FPS    = 49.9; // output frames per second
+
+function scriptToTokenIds(text) {
+  const tokens = [];
+  const norm = text.toUpperCase().replace(/[^A-Z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const ch of norm) {
+    if (ch === ' ') {
+      if (tokens.length && tokens[tokens.length - 1] !== SEP_ID) tokens.push(SEP_ID);
+    } else if (W2V_C2ID[ch] !== undefined) {
+      tokens.push(W2V_C2ID[ch]);
+    }
+  }
+  while (tokens.length && tokens[tokens.length - 1] === SEP_ID) tokens.pop();
+  return tokens;
+}
+
+/**
+ * Band-limited Viterbi CTC forced alignment.
+ * Memory: O(tokens) — only keeps two rows of the DP table.
+ * Tracks the "peak probability frame" for each CTC state.
+ *
+ * @param {Float32Array} logProbs  shape [T * V], log-softmax
+ * @param {number}       T         number of time frames
+ * @param {number}       V         vocab size
+ * @param {number[]}     tokens    character token IDs (no blanks)
+ * @returns {Int32Array}           frame index for each token
+ */
+function bandedViterbiAlign(logProbs, T, V, tokens) {
+  // Build CTC target: blank t0 blank t1 blank t2 blank ...
+  const ctc = [BLANK_ID];
+  for (const t of tokens) { ctc.push(t); ctc.push(BLANK_ID); }
+  const S = ctc.length;
+
+  // Band half-width: allow deviation of ±BAND frames from expected position
+  const BAND = Math.max(40, Math.ceil(T / S * 4));
+  const NEG  = -1e30;
+
+  let dpPrev = new Float32Array(S).fill(NEG);
+  let dpCurr = new Float32Array(S).fill(NEG);
+
+  // Track frame of peak forward probability for each CTC state
+  const peakFrame = new Int32Array(S).fill(0);
+  const peakScore = new Float32Array(S).fill(NEG);
+
+  // Initialize t=0
+  dpPrev[0] = logProbs[0 * V + BLANK_ID];
+  if (S > 1) dpPrev[1] = logProbs[0 * V + ctc[1]];
+  for (let s = 0; s < 2 && s < S; s++) {
+    if (dpPrev[s] > peakScore[s]) { peakScore[s] = dpPrev[s]; peakFrame[s] = 0; }
+  }
+
+  for (let t = 1; t < T; t++) {
+    dpCurr.fill(NEG);
+
+    const center = Math.round(t * S / T);
+    const lo = Math.max(0,   center - BAND);
+    const hi = Math.min(S-1, center + BAND);
+
+    for (let s = lo; s <= hi; s++) {
+      const lp = logProbs[t * V + ctc[s]];
+
+      // Transitions: stay | advance | skip-blank
+      let best = dpPrev[s];
+      if (s > 0 && dpPrev[s-1] > best) best = dpPrev[s-1];
+      if (s > 1 && ctc[s] !== BLANK_ID && ctc[s] !== ctc[s-2] && dpPrev[s-2] > best)
+        best = dpPrev[s-2];
+
+      if (best > NEG) {
+        dpCurr[s] = best + lp;
+        if (dpCurr[s] > peakScore[s]) { peakScore[s] = dpCurr[s]; peakFrame[s] = t; }
+      }
+    }
+
+    // Swap buffers
+    const tmp = dpPrev; dpPrev = dpCurr; dpCurr = tmp;
+  }
+
+  // Extract frame for each original token (at CTC position 2i+1)
+  const tokenFrames = new Int32Array(tokens.length);
+  for (let i = 0; i < tokens.length; i++) {
+    tokenFrames[i] = peakFrame[2 * i + 1];
+  }
+  return tokenFrames;
+}
+
+/**
+ * Group character token frames into word timestamps.
+ * Uses the original script text to reconstruct word boundaries.
+ */
+function tokenFramesToSegments(tokenFrames, tokens, scriptText, T, chunkSize = 5) {
+  const norm = scriptText.toUpperCase().replace(/[^A-Z' ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Build list of words with their token ranges
+  const words = [];
+  let tIdx = 0;
+  let wordStart = -1, wordText = '', wordTokStart = -1;
+
+  for (const ch of norm) {
+    if (ch === ' ') {
+      if (wordText) {
+        words.push({ text: wordText, tokStart: wordTokStart, tokEnd: tIdx - 1 });
+        wordText = ''; wordTokStart = -1;
+      }
+      tIdx++; // separator token
+    } else if (W2V_C2ID[ch] !== undefined) {
+      if (!wordText) wordTokStart = tIdx;
+      wordText += ch;
+      tIdx++;
+    }
+  }
+  if (wordText) words.push({ text: wordText, tokStart: wordTokStart, tokEnd: tIdx - 1 });
+
+  // Convert token indices to timestamps
+  const wordTimestamps = words.map(w => ({
+    text: w.text.toLowerCase(),
+    start: w.tokStart >= 0 ? tokenFrames[w.tokStart]  / W2V_FPS : 0,
+    end:   w.tokEnd   >= 0 ? (tokenFrames[w.tokEnd] + 1) / W2V_FPS : T / W2V_FPS,
+  }));
+
+  // Fill in missing frames (fallback: linear interpolation)
+  for (let i = 0; i < wordTimestamps.length; i++) {
+    if (!isFinite(wordTimestamps[i].start)) {
+      wordTimestamps[i].start = i > 0 ? wordTimestamps[i-1].end : 0;
+    }
+  }
+
+  // Group into subtitle chunks
+  const chunks = [];
+  for (let i = 0; i < wordTimestamps.length; i += chunkSize) {
+    const group = wordTimestamps.slice(i, i + chunkSize);
+    chunks.push({
+      text: group.map(w => w.text).join(' '),
+      timestamp: [group[0].start, group[group.length-1].end],
+    });
+  }
+
+  return {
+    text: wordTimestamps.map(w => w.text).join(' '),
+    chunks,
+  };
+}
+
+async function runForceAlign(audio, scriptText, log, setProgress) {
+  const { AutoProcessor, Wav2Vec2ForCTC } = window.__transformers;
+
+  // Load wav2vec2
+  log('Loading wav2vec2 alignment model...');
+  setProgress(5, 'Downloading alignment model (~95 MB, first time only)...');
+
+  const processor = await AutoProcessor.from_pretrained('Xenova/wav2vec2-base-960h', {
+    progress_callback: (p) => {
+      if (p.status === 'downloading') {
+        const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
+        setProgress(pct, 'Downloading alignment model... ' + pct + '%');
+      }
+    }
+  });
+
+  const model = await Wav2Vec2ForCTC.from_pretrained('Xenova/wav2vec2-base-960h', {
+    progress_callback: (p) => {
+      if (p.status === 'downloading') {
+        const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
+        setProgress(40 + pct, 'Loading model weights... ' + (40 + pct) + '%');
+      }
+    }
+  });
+
+  log('Model loaded. Running acoustic model on audio...');
+  setProgress(82, 'Running wav2vec2 on audio...');
+
+  // Process audio: wav2vec2 expects raw 16kHz float32
+  const inputs = await processor(audio, { sampling_rate: 16000 });
+  const { logits } = await model(inputs);
+
+  // logits: Tensor shape [1, T, V]
+  const T = logits.dims[1];
+  const V = logits.dims[2];
+  const rawLogits = logits.data; // Float32Array, flat [1, T, V]
+
+  // Log-softmax per frame (needed for valid CTC probabilities)
+  log(`Acoustic frames: ${T} (${(T / W2V_FPS).toFixed(1)}s). Computing log-softmax...`);
+  const logProbs = new Float32Array(T * V);
+  for (let t = 0; t < T; t++) {
+    const offset = t * V;
+    let maxVal = rawLogits[offset];
+    for (let v = 1; v < V; v++) if (rawLogits[offset + v] > maxVal) maxVal = rawLogits[offset + v];
+    let sumExp = 0;
+    for (let v = 0; v < V; v++) sumExp += Math.exp(rawLogits[offset + v] - maxVal);
+    const logSum = Math.log(sumExp) + maxVal;
+    for (let v = 0; v < V; v++) logProbs[offset + v] = rawLogits[offset + v] - logSum;
+  }
+
+  setProgress(88, 'Running CTC forced alignment...');
+  log('Aligning script to audio with band-limited Viterbi...');
+
+  const tokens = scriptToTokenIds(scriptText);
+  log(`Script tokens: ${tokens.length} characters`);
+
+  if (tokens.length === 0) {
+    log('Error: script contains no recognizable characters.');
+    setProgress(0, 'Script error.');
+    return;
+  }
+  if (tokens.length > T * 0.9) {
+    log('Warning: script may be too long for this audio. Results may be inaccurate.');
+  }
+
+  const tokenFrames = bandedViterbiAlign(logProbs, T, V, tokens);
+  log('Alignment done. Grouping into subtitle chunks...');
+
+  const result = tokenFramesToSegments(tokenFrames, tokens, scriptText, T);
+
+  setProgress(100, 'Done!');
+  log(`Created ${result.chunks.length} subtitle chunks.`);
+
+  transcript = result.text;
+  segments   = result.chunks;
+  showResult(transcript);
+}
+
+// ── Output helpers ────────────────────────────────────────────────────────────
+function showResult(text) {
+  document.getElementById('transcriptBox').textContent = text;
+  document.getElementById('resultWrap').style.display = 'block';
+  document.getElementById('progressWrap').classList.remove('visible');
+}
+
 function toSRTTime(s) {
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + sec.toFixed(3).replace('.',',').padStart(6,'0');
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' +
+         sec.toFixed(3).replace('.',',').padStart(6,'0');
 }
 
 function downloadSRT() {
-  if (!segments.length) return;
+  if (!segments || !segments.length) return;
   let srt = '';
   segments.forEach((seg, i) => {
-    const [start, end] = seg.timestamp || [0, 0];
+    const [start, end] = seg.timestamp || [0, 1];
     srt += (i+1) + '\n' + toSRTTime(start) + ' --> ' + toSRTTime(end) + '\n' + seg.text.trim() + '\n\n';
   });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([srt], {type:'text/plain'}));
+  a.href = URL.createObjectURL(new Blob([srt], { type: 'text/plain' }));
   a.download = currentFileName + '.srt';
   a.click();
 }
@@ -232,7 +564,7 @@ function downloadSRT() {
 function downloadTXT() {
   if (!transcript) return;
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([transcript], {type:'text/plain'}));
+  a.href = URL.createObjectURL(new Blob([transcript], { type: 'text/plain' }));
   a.download = currentFileName + '.txt';
   a.click();
 }
