@@ -606,7 +606,7 @@ async function burnCaptions() {
       // Load ffmpeg JS from local path so import.meta.url is same-origin
       // (CDN ESM imports cause cross-origin Worker failures)
       const { FFmpeg } = await import('./ffmpeg/index.js');
-      const { fetchFile, toBlobURL } = await import('./ffmpeg/util.js');
+      const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
       const ff = new FFmpeg();
       ff.on('progress', ({ progress }) => {
         burnBar.style.width = (10 + progress * 88) + '%';
