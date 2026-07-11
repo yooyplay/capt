@@ -554,7 +554,35 @@ function showResult(text) {
   document.getElementById('transcriptBox').textContent = text;
   document.getElementById('resultWrap').style.display = 'block';
   document.getElementById('progressWrap').classList.remove('visible');
+  // Auto-save to localStorage
+  try {
+    localStorage.setItem('capt_last_transcript', text);
+    localStorage.setItem('capt_last_segments', JSON.stringify(segments));
+    localStorage.setItem('capt_last_filename', currentFileName || '');
+    localStorage.setItem('capt_last_saved', new Date().toLocaleString());
+  } catch(e) {}
 }
+
+function restoreLastSession() {
+  try {
+    const saved = localStorage.getItem('capt_last_transcript');
+    const savedSegs = localStorage.getItem('capt_last_segments');
+    const savedTime = localStorage.getItem('capt_last_saved');
+    if (!saved || !savedSegs) return;
+    transcript = saved;
+    segments = JSON.parse(savedSegs);
+    currentFileName = localStorage.getItem('capt_last_filename') || 'transcript';
+    showResult(saved);
+    const box = document.getElementById('transcriptBox');
+    if (savedTime) {
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:11px;color:var(--muted);margin-top:8px;';
+      note.textContent = 'Restored from ' + savedTime;
+      box.parentNode.insertBefore(note, box.nextSibling);
+    }
+  } catch(e) {}
+}
+window.addEventListener('DOMContentLoaded', restoreLastSession);
 
 function toSRTTime(s) {
   const h = Math.floor(s / 3600);
