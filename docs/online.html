@@ -1038,11 +1038,20 @@ async function burnCaptions() {
       let rafId;
       const dur = videoEl.duration || 1;
 
+      const startedAt = Date.now();
+      function fmtSec(s) {
+        s = Math.max(0, Math.round(s));
+        const m = Math.floor(s / 60), sec = s % 60;
+        return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+      }
       const tick = setInterval(() => {
         if (videoEl.ended) return;
-        const pct = Math.min(99, Math.round(videoEl.currentTime / dur * 90));
+        const elapsed  = (Date.now() - startedAt) / 1000;
+        const progress = videoEl.currentTime / dur;
+        const pct      = Math.min(99, Math.round(progress * 90));
+        const remaining = progress > 0.01 ? (elapsed / progress) * (1 - progress) : dur - videoEl.currentTime;
         burnBar.style.width   = (10 + pct * 0.88) + '%';
-        burnLabel.textContent = `Burning captions... ${pct}%`;
+        burnLabel.textContent = `Burning captions... ${pct}% · ${fmtSec(elapsed)} elapsed · ~${fmtSec(remaining)} left`;
       }, 500);
 
       videoEl.onended = () => {
