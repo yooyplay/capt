@@ -935,99 +935,157 @@ async function burnCaptions() {
   btn.textContent = 'Burning...';
   burnWrap.style.display = 'block';
   burnBar.style.width = '5%';
-  burnLabel.textContent = 'Loading FFmpeg...';
+  burnLabel.textContent = 'Preparing...';
   const burnLogEl = document.getElementById('burnLog');
   burnLogEl.textContent = '';
-  burnLogEl.style.display = 'block';
+  burnLogEl.style.display = 'none';
 
   try {
-    // Lazy-load ffmpeg.wasm
-    if (!window.__ffmpeg) {
-      // Load ffmpeg JS from local path so import.meta.url is same-origin
-      // (CDN ESM imports cause cross-origin Worker failures)
-      const { FFmpeg } = await import('./ffmpeg/index.js');
-      const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
-      const ff = new FFmpeg();
-      ff.on('progress', ({ progress }) => {
-        burnBar.style.width = (10 + progress * 88) + '%';
-        burnLabel.textContent = 'Encoding... ' + Math.round(progress * 100) + '%';
-      });
-      // Capture ffmpeg log output for debugging
-      const ffLog = document.getElementById('burnLog');
-      ff.on('log', ({ message }) => {
-        if (ffLog) { ffLog.textContent += message + '\n'; ffLog.scrollTop = ffLog.scrollHeight; }
-        console.log('[ffmpeg]', message);
-      });
-      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-      await ff.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      });
-      window.__ffmpeg = ff;
-      window.__fetchFile = fetchFile;
+    syncStyleFromUI();
+
+    // Load bundled font into the browser so Canvas 2D renders it correctly
+    if (!window.__captFont) {
+      burnLabel.textContent = 'Loading font...';
+      const face = new FontFace('CaptFont', 'url(font.ttf)');
+      await face.load();
+      document.fonts.add(face);
+      window.__captFont = true;
     }
 
-    const ff = window.__ffmpeg;
-    const fetchFile = window.__fetchFile;
+    // Set up video element for frame-by-frame rendering
+    const videoEl = document.createElement('video');
+    videoEl.src = URL.createObjectURL(currentVideoFile);
+    videoEl.muted = true; // allows autoplay; audio captured via Web Audio below
+    videoEl.preload = 'auto';
+    await new Promise((res, rej) => {
+      videoEl.onloadedmetadata = res;
+      videoEl.onerror = rej;
+      setTimeout(res, 8000);
+    });
 
-    burnBar.style.width = '10%';
-    burnLabel.textContent = 'Preparing files...';
+    const vw = videoEl.videoWidth  || 1280;
+    const vh = videoEl.videoHeight || 720;
 
-    const ext = currentVideoFile.name.split('.').pop() || 'mp4';
-    await ff.writeFile('input.' + ext, await fetchFile(currentVideoFile));
+    // Off-screen canvas for compositing
+    const canvas = document.createElement('canvas');
+    canvas.width  = vw;
+    canvas.height = vh;
+    const ctx = canvas.getContext('2d');
 
-    // Write bundled font so drawtext has a fontfile= in the browser sandbox
-    // (ffmpeg.wasm has no system fonts and no fontconfig)
-    const fontURL = new URL('font.ttf', window.location.href).href;
-    await ff.writeFile('/font.ttf', await fetchFile(fontURL));
+    // Capture audio via Web Audio (routes around the muted attribute)
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+    const audioSrc  = audioCtx.createMediaElementSource(videoEl);
+    const audioDest = audioCtx.createMediaStreamDestination();
+    audioSrc.connect(audioDest); // capture only — do NOT connect to speakers
 
-    burnBar.style.width = '15%';
-    burnLabel.textContent = 'Burning captions...';
+    // Combine canvas video stream + audio tracks
+    const outStream = canvas.captureStream(60);
+    for (const t of audioDest.stream.getAudioTracks()) outStream.addTrack(t);
 
-    // Get actual video dimensions from the browser so we can use fixed pixel coords
-    // in drawtext/drawbox (avoids tw/th filter-expression bugs in ffmpeg.wasm)
-    let vw = 1280, vh = 720;
-    try {
-      const tmpVid = document.createElement('video');
-      tmpVid.src = URL.createObjectURL(currentVideoFile);
-      await new Promise((res) => { tmpVid.onloadedmetadata = res; setTimeout(res, 3000); });
-      if (tmpVid.videoWidth)  vw = tmpVid.videoWidth;
-      if (tmpVid.videoHeight) vh = tmpVid.videoHeight;
-      URL.revokeObjectURL(tmpVid.src);
-    } catch(e) {}
+    // Pick best supported format
+    const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']
+      .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
 
-    syncStyleFromUI();
-    const vf = buildDrawtextVF(segments, vw, vh);
+    const recorder = new MediaRecorder(outStream, { mimeType, videoBitsPerSecond: 8_000_000 });
+    const chunks   = [];
+    recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
-    const ret = await ff.exec([
-      '-i', 'input.' + ext,
-      '-vf', vf,
-      '-c:a', 'copy',
-      'output.' + ext
-    ]);
-    if (ret !== 0) throw new Error(`ffmpeg exited with code ${ret} — check browser console for details`);
+    // Style constants (computed once)
+    const fs        = captStyle.fontSize;
+    const fontStr   = `${captStyle.italic ? 'italic ' : ''}${captStyle.bold ? 'bold ' : ''}${fs}px CaptFont, Arial, sans-serif`;
+    const pad       = Math.round(fs * 0.35);
+    const bgAlpha   = Math.round(captStyle.bgOpacity * 255).toString(16).padStart(2, '0').toUpperCase();
 
-    burnBar.style.width = '100%';
+    function getActiveSeg(t) {
+      return segments.find(s => { const [a,b] = s.timestamp||[0,0]; return t>=a && t<=b; }) || null;
+    }
+
+    function drawSubtitle(t) {
+      const seg = getActiveSeg(t);
+      if (!seg) return;
+      const text = (seg.text || '').trim();
+      if (!text) return;
+
+      ctx.font          = fontStr;
+      ctx.textAlign     = 'center';
+      ctx.textBaseline  = 'alphabetic';
+
+      const tw  = ctx.measureText(text).width;
+      const x   = vw / 2;
+      let   y;
+      if      (captStyle.position === 'top')    y = Math.round(fs * 2);
+      else if (captStyle.position === 'center') y = Math.round(vh / 2 + fs / 2);
+      else                                       y = vh - Math.round(fs * 0.8);
+
+      if (captStyle.bgEnabled && captStyle.bgOpacity > 0) {
+        ctx.fillStyle = captStyle.bgColor + bgAlpha;
+        ctx.fillRect(
+          Math.round(x - tw/2 - pad),
+          Math.round(y - fs - pad),
+          Math.round(tw + pad * 2),
+          Math.round(fs + pad * 2)
+        );
+      }
+      ctx.fillStyle = captStyle.textColor;
+      ctx.fillText(text, x, y);
+    }
+
+    burnBar.style.width  = '10%';
+    burnLabel.textContent = 'Burning captions... 0%';
+
+    await new Promise((resolve, reject) => {
+      let rafId;
+      const dur = videoEl.duration || 1;
+
+      const tick = setInterval(() => {
+        if (videoEl.ended) return;
+        const pct = Math.min(99, Math.round(videoEl.currentTime / dur * 90));
+        burnBar.style.width   = (10 + pct * 0.88) + '%';
+        burnLabel.textContent = `Burning captions... ${pct}%`;
+      }, 500);
+
+      videoEl.onended = () => {
+        clearInterval(tick);
+        cancelAnimationFrame(rafId);
+        ctx.drawImage(videoEl, 0, 0, vw, vh); // flush last frame
+        setTimeout(() => recorder.stop(), 400);
+      };
+
+      recorder.onstop  = resolve;
+      recorder.onerror = e => reject(e.error || e);
+
+      recorder.start(200);
+
+      function loop() {
+        if (videoEl.ended) return;
+        ctx.drawImage(videoEl, 0, 0, vw, vh);
+        drawSubtitle(videoEl.currentTime);
+        rafId = requestAnimationFrame(loop);
+      }
+
+      videoEl.play().then(() => { rafId = requestAnimationFrame(loop); }).catch(reject);
+    });
+
+    burnBar.style.width   = '100%';
     burnLabel.textContent = 'Done!';
 
-    const data = await ff.readFile('output.' + ext);
-    const blob = new Blob([data.buffer], { type: 'video/' + (ext === 'mp4' ? 'mp4' : ext) });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = currentFileName + '_captioned.' + ext;
-    a.click();
+    URL.revokeObjectURL(videoEl.src);
+    audioCtx.close();
 
-    // Cleanup
-    await ff.deleteFile('input.' + ext);
-    await ff.deleteFile('output.' + ext);
+    const blob = new Blob(chunks, { type: mimeType });
+    const a = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = currentFileName + '_captioned.webm';
+    a.click();
 
   } catch (err) {
     burnLabel.textContent = 'Error: ' + err.message;
     console.error(err);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Download video with captions';
-    setTimeout(() => { burnWrap.style.display = 'none'; burnBar.style.width = '0%'; }, 3000);
+    btn.disabled     = false;
+    btn.textContent  = 'Download video with captions';
+    setTimeout(() => { burnWrap.style.display = 'none'; burnBar.style.width = '0%'; }, 4000);
   }
 }
 
