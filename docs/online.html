@@ -1091,16 +1091,59 @@ async function burnCaptions() {
       videoEl.play().then(() => { rafId = requestAnimationFrame(loop); }).catch(reject);
     });
 
-    burnBar.style.width   = '100%';
-    burnLabel.textContent = 'Done!';
-
     URL.revokeObjectURL(videoEl.src);
     if (audioCtx) audioCtx.close();
 
-    const blob = new Blob(chunks, { type: mimeType });
+    const webmBlob = new Blob(chunks, { type: mimeType });
+
+    // Try to convert WebM → MP4 via ffmpeg.wasm (no filter, just remux/transcode)
+    let finalBlob = webmBlob, finalExt = 'webm';
+    try {
+      burnBar.style.width   = '97%';
+      burnLabel.textContent = 'Converting to MP4...';
+
+      if (!window.__ffmpeg) {
+        const { FFmpeg }          = await import('./ffmpeg/index.js');
+        const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
+        const ff = new FFmpeg();
+        ff.on('progress', ({ progress }) => {
+          burnLabel.textContent = `Converting to MP4... ${Math.round(progress * 100)}%`;
+        });
+        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+        await ff.load({
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+        window.__ffmpeg    = ff;
+        window.__fetchFile = fetchFile;
+      }
+      const ff        = window.__ffmpeg;
+      const fetchFile = window.__fetchFile;
+
+      await ff.writeFile('captioned.webm', await fetchFile(webmBlob));
+      const ret = await ff.exec([
+        '-i', 'captioned.webm',
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-movflags', '+faststart',
+        'output.mp4',
+      ]);
+      if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
+
+      const data = await ff.readFile('output.mp4');
+      finalBlob = new Blob([data.buffer], { type: 'video/mp4' });
+      finalExt  = 'mp4';
+      try { await ff.deleteFile('captioned.webm'); await ff.deleteFile('output.mp4'); } catch(e) {}
+    } catch(e) {
+      console.warn('[capt] MP4 conversion failed, keeping WebM:', e.message);
+    }
+
+    burnBar.style.width   = '100%';
+    burnLabel.textContent = 'Done!';
+
     const a = document.createElement('a');
-    a.href     = URL.createObjectURL(blob);
-    a.download = currentFileName + '_captioned.webm';
+    a.href     = URL.createObjectURL(finalBlob);
+    a.download = currentFileName + '_captioned.' + finalExt;
     a.click();
 
   } catch (err) {
