@@ -845,7 +845,7 @@ function buildDrawtextVF(segs) {
     if (captStyle.bgEnabled && captStyle.bgOpacity > 0) {
       parts.push(`drawbox=y=${stripY}:w=iw:h=${stripH}:color=${bc}@${op}:t=fill:enable='${en}'`);
     }
-    parts.push(`drawtext=text='${text}':fontsize=${fs}:fontcolor=${tc}:x=(w-tw)/2:y=${textY}:enable='${en}'`);
+    parts.push(`drawtext=text='${text}':fontsize=${fs}:fontcolor=${tc}:fontfile=/font.ttf:x=(w-tw)/2:y=${textY}:enable='${en}'`);
   }
   return parts.length ? parts.join(',') : 'null';
 }
@@ -978,6 +978,10 @@ async function burnCaptions() {
 
     const ext = currentVideoFile.name.split('.').pop() || 'mp4';
     await ff.writeFile('input.' + ext, await fetchFile(currentVideoFile));
+
+    // Write bundled font so drawtext has a fontfile= in the browser sandbox
+    // (ffmpeg.wasm has no system fonts and no fontconfig)
+    await ff.writeFile('/font.ttf', await fetchFile('font.ttf'));
 
     burnBar.style.width = '15%';
     burnLabel.textContent = 'Burning captions...';
