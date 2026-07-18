@@ -812,23 +812,19 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
 // vw/vh are the actual video dimensions obtained from the browser <video> element.
 function buildDrawtextVF(segs, vw, vh) {
   syncStyleFromUI();
-  const fs     = captStyle.fontSize;
-  const tc     = '0x' + captStyle.textColor.slice(1).toUpperCase();
-  const bc     = '0x' + captStyle.bgColor.slice(1).toUpperCase();
-  const op     = captStyle.bgOpacity.toFixed(2);
-  const stripH = Math.round(fs * 2.6);
+  const fs = captStyle.fontSize;
+  const tc = '0x' + captStyle.textColor.slice(1).toUpperCase();
+  const bc = '0x' + captStyle.bgColor.slice(1).toUpperCase();
+  const op = captStyle.bgOpacity.toFixed(2);
 
   // y coords — fixed pixel values, no ffmpeg filter expressions
-  let stripY, textY;
+  let textY;
   if (captStyle.position === 'top') {
-    stripY = 0;
-    textY  = Math.round(stripH / 2 - fs / 2);
+    textY = Math.round(fs * 0.8);
   } else if (captStyle.position === 'center') {
-    stripY = Math.round((vh - stripH) / 2);
-    textY  = Math.round((vh - fs) / 2);
+    textY = Math.round((vh - fs) / 2);
   } else {
-    stripY = vh - stripH;
-    textY  = vh - Math.round(stripH / 2) - Math.round(fs / 2);
+    textY = vh - Math.round(fs * 2.2);
   }
 
   // Estimate text width to center horizontally (Liberation Sans ~0.52× font-size per char)
@@ -846,21 +842,24 @@ function buildDrawtextVF(segs, vw, vh) {
     const text = escText((seg.text || '').trim());
     if (!text) continue;
     const [s, e] = seg.timestamp || [0, 1];
-    const en     = `between(t,${s.toFixed(3)},${e.toFixed(3)})`;
 
     // Estimate x so the text is centered; clamp to left edge
     const estW = Math.round(text.replace(/\\./g, '.').length * CHAR_W);
     const x    = Math.max(10, Math.round((vw - estW) / 2));
 
+    // Use alpha= instead of enable= to avoid "Error reinitializing filters" in ffmpeg.wasm.
+    // enable= triggers a filter-graph reconfiguration when its expression changes value;
+    // alpha= is evaluated per-frame without reconfiguring — no reinit, no crash.
+    // Use drawtext's built-in box= for background (eliminates the separate drawbox filter).
+    const alphaExpr = `if(between(t,${s.toFixed(3)},${e.toFixed(3)}),1,0)`;
+    let dt = `drawtext=text='${text}':fontsize=${fs}:fontcolor=${tc}:fontfile=/font.ttf` +
+             `:x=${x}:y=${textY}:alpha='${alphaExpr}'`;
     if (captStyle.bgEnabled && captStyle.bgOpacity > 0) {
-      parts.push(
-        `drawbox=x=0:y=${stripY}:w=${vw}:h=${stripH}:color=${bc}@${op}:t=fill:enable='${en}'`
-      );
+      dt += `:box=1:boxcolor=${bc}@${op}:boxborderw=${Math.round(fs * 0.4)}`;
+    } else {
+      dt += `:borderw=2:bordercolor=0x000000`;
     }
-    parts.push(
-      `drawtext=text='${text}':fontsize=${fs}:fontcolor=${tc}:fontfile=/font.ttf` +
-      `:x=${x}:y=${textY}:enable='${en}'`
-    );
+    parts.push(dt);
   }
   return parts.length ? parts.join(',') : 'null';
 }
