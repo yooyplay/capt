@@ -943,24 +943,35 @@ async function burnCaptions() {
   try {
     syncStyleFromUI();
 
-    // Load bundled font into the browser so Canvas 2D renders it correctly
+    // Load bundled font into the browser so Canvas 2D renders it correctly.
+    // Fetch bytes directly — more reliable than FontFace url() in some environments.
     if (!window.__captFont) {
       burnLabel.textContent = 'Loading font...';
-      const fontURL = new URL('font.ttf', window.location.href).href;
-      const face = new FontFace('CaptFont', `url(${fontURL})`);
-      await face.load();
-      document.fonts.add(face);
-      window.__captFont = true;
+      try {
+        const fontURL  = new URL('font.ttf', window.location.href).href;
+        const resp     = await fetch(fontURL);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const fontBuf  = await resp.arrayBuffer();
+        const face     = new FontFace('CaptFont', fontBuf);
+        await face.load();
+        document.fonts.add(face);
+        window.__captFont = 'CaptFont';
+      } catch(e) {
+        console.warn('[capt] Custom font unavailable, using Arial:', e.message);
+        window.__captFont = 'Arial';
+      }
     }
+    const fontFamily = window.__captFont || 'Arial';
 
     // Set up video element for frame-by-frame rendering
+    burnLabel.textContent = 'Loading video...';
     const videoEl = document.createElement('video');
     videoEl.src = URL.createObjectURL(currentVideoFile);
     videoEl.muted = true; // allows autoplay; audio captured via Web Audio below
     videoEl.preload = 'auto';
     await new Promise((res, rej) => {
       videoEl.onloadedmetadata = res;
-      videoEl.onerror = rej;
+      videoEl.onerror = e => rej(new Error('Video load failed: ' + (videoEl.error?.message || e)));
       setTimeout(res, 8000);
     });
 
@@ -997,7 +1008,7 @@ async function burnCaptions() {
 
     // Style constants (computed once)
     const fs        = captStyle.fontSize;
-    const fontStr   = `${captStyle.italic ? 'italic ' : ''}${captStyle.bold ? 'bold ' : ''}${fs}px CaptFont, Arial, sans-serif`;
+    const fontStr   = `${captStyle.italic ? 'italic ' : ''}${captStyle.bold ? 'bold ' : ''}${fs}px ${fontFamily}, Arial, sans-serif`;
     const pad       = Math.round(fs * 0.35);
     const bgAlpha   = Math.round(captStyle.bgOpacity * 255).toString(16).padStart(2, '0').toUpperCase();
 
