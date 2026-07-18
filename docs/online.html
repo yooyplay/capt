@@ -308,6 +308,7 @@
     <div id="burnWrap" style="display:none;margin-top:12px;">
       <div class="progress-label" id="burnLabel">Burning captions into video...</div>
       <div class="progress-bar-bg"><div class="progress-bar" id="burnBar"></div></div>
+      <div class="log-box" id="burnLog" style="display:none;margin-top:8px;"></div>
     </div>
   </div>
 
@@ -875,6 +876,7 @@ function showResult(text) {
   document.getElementById('transcriptBox').textContent = text;
   document.getElementById('resultWrap').style.display = 'block';
   document.getElementById('progressWrap').classList.remove('visible');
+  document.getElementById('dropSub').textContent = 'Done! Drop another file to start over.';
   // Auto-save to localStorage
   try {
     localStorage.setItem('capt_last_transcript', text);
@@ -948,6 +950,9 @@ async function burnCaptions() {
   burnWrap.style.display = 'block';
   burnBar.style.width = '5%';
   burnLabel.textContent = 'Loading FFmpeg...';
+  const burnLogEl = document.getElementById('burnLog');
+  burnLogEl.textContent = '';
+  burnLogEl.style.display = 'block';
 
   try {
     // Lazy-load ffmpeg.wasm
@@ -960,6 +965,12 @@ async function burnCaptions() {
       ff.on('progress', ({ progress }) => {
         burnBar.style.width = (10 + progress * 88) + '%';
         burnLabel.textContent = 'Encoding... ' + Math.round(progress * 100) + '%';
+      });
+      // Capture ffmpeg log output for debugging
+      const ffLog = document.getElementById('burnLog');
+      ff.on('log', ({ message }) => {
+        if (ffLog) { ffLog.textContent += message + '\n'; ffLog.scrollTop = ffLog.scrollHeight; }
+        console.log('[ffmpeg]', message);
       });
       const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
       await ff.load({
@@ -981,7 +992,8 @@ async function burnCaptions() {
 
     // Write bundled font so drawtext has a fontfile= in the browser sandbox
     // (ffmpeg.wasm has no system fonts and no fontconfig)
-    await ff.writeFile('/font.ttf', await fetchFile('font.ttf'));
+    const fontURL = new URL('font.ttf', window.location.href).href;
+    await ff.writeFile('/font.ttf', await fetchFile(fontURL));
 
     burnBar.style.width = '15%';
     burnLabel.textContent = 'Burning captions...';
@@ -990,12 +1002,13 @@ async function burnCaptions() {
     syncStyleFromUI();
     const vf = buildDrawtextVF(segments);
 
-    await ff.exec([
+    const ret = await ff.exec([
       '-i', 'input.' + ext,
       '-vf', vf,
       '-c:a', 'copy',
       'output.' + ext
     ]);
+    if (ret !== 0) throw new Error(`ffmpeg exited with code ${ret} — check browser console for details`);
 
     burnBar.style.width = '100%';
     burnLabel.textContent = 'Done!';
