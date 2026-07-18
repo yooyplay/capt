@@ -302,9 +302,7 @@
     <h3 style="font-size:1rem;font-weight:700;margin-bottom:12px;">Transcript</h3>
     <div id="transcriptBox" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;font-size:.88rem;color:var(--muted);line-height:1.7;max-height:300px;overflow-y:auto;white-space:pre-wrap;"></div>
     <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
-      <button class="btn btn-primary" onclick="downloadSRT()" style="font-size:13px;padding:10px 20px;">Download .srt</button>
-      <button class="btn btn-secondary" onclick="downloadTXT()" style="font-size:13px;padding:10px 20px;">Download .txt</button>
-      <button class="btn btn-secondary" id="burnBtn" onclick="burnCaptions()" style="font-size:13px;padding:10px 20px;">Download video with captions</button>
+      <button class="btn btn-primary" id="burnBtn" onclick="burnCaptions()" style="font-size:13px;padding:10px 20px;">Download video with captions</button>
       <button class="btn btn-secondary" onclick="resetTool()" style="font-size:13px;padding:10px 20px;">Caption another</button>
     </div>
     <div id="burnWrap" style="display:none;margin-top:12px;">
