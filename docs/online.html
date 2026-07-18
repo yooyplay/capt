@@ -1014,10 +1014,13 @@ async function burnCaptions() {
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
     // ── Style constants ───────────────────────────────────────────────────────
-    const fs      = captStyle.fontSize;
+    // Scale font size from the UI's ~400px reference height to actual video height
+    // so captions look the same size regardless of resolution.
+    const fs      = Math.round(captStyle.fontSize * (vh / 400));
     const fontStr = `${captStyle.italic ? 'italic ' : ''}${captStyle.bold ? 'bold ' : ''}${fs}px ${fontFamily}, Arial, sans-serif`;
-    const pad     = Math.round(fs * 0.35);
+    const pad     = Math.round(fs * 0.4);
     const bgAlpha = Math.round(captStyle.bgOpacity * 255).toString(16).padStart(2, '0').toUpperCase();
+    const margin  = Math.round(vh * 0.05); // 5% from edge
 
     function getActiveSeg(t) {
       return segments.find(s => { const [a,b] = s.timestamp||[0,0]; return t>=a && t<=b; }) || null;
@@ -1027,21 +1030,37 @@ async function burnCaptions() {
       if (!seg) return;
       const text = (seg.text || '').trim();
       if (!text) return;
+
       ctx.font         = fontStr;
       ctx.textAlign    = 'center';
-      ctx.textBaseline = 'alphabetic';
+      ctx.textBaseline = 'bottom';  // y is now the bottom of the text
+
       const tw = ctx.measureText(text).width;
       const x  = vw / 2;
       let y;
-      if      (captStyle.position === 'top')    y = Math.round(fs * 2);
+      if      (captStyle.position === 'top')    y = margin + fs;
       else if (captStyle.position === 'center') y = Math.round(vh / 2 + fs / 2);
-      else                                       y = vh - Math.round(fs * 0.8);
+      else                                       y = vh - margin;
+
+      // Background box
       if (captStyle.bgEnabled && captStyle.bgOpacity > 0) {
         ctx.fillStyle = captStyle.bgColor + bgAlpha;
-        ctx.fillRect(Math.round(x-tw/2-pad), Math.round(y-fs-pad), Math.round(tw+pad*2), Math.round(fs+pad*2));
+        ctx.fillRect(Math.round(x - tw/2 - pad), Math.round(y - fs - pad),
+                     Math.round(tw + pad*2), Math.round(fs + pad*2));
       }
+
+      // Text shadow for readability even without background
+      ctx.shadowColor   = 'rgba(0,0,0,0.75)';
+      ctx.shadowBlur    = Math.round(fs * 0.15);
+      ctx.shadowOffsetX = Math.round(fs * 0.04);
+      ctx.shadowOffsetY = Math.round(fs * 0.04);
+
       ctx.fillStyle = captStyle.textColor;
       ctx.fillText(text, x, y);
+
+      // Reset shadow so it doesn't affect video frames
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur  = 0;
     }
 
     // ── Record ────────────────────────────────────────────────────────────────
