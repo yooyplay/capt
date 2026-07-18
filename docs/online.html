@@ -986,13 +986,30 @@ async function burnCaptions() {
     canvas.height = vh;
     const ctx     = canvas.getContext('2d');
 
-    // Record video-only — audio is added afterwards via ffmpeg stream-copy
-    // (avoids Web Audio API issues and produces cleaner audio)
-    const videoStream = canvas.captureStream(30);
-    const mimeType    = ['video/webm;codecs=vp8','video/webm']
-      .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+    // On Safari, MediaRecorder supports video/mp4 natively (H.264+AAC) — use it directly.
+    // On Chrome/Firefox, record video-only WebM and mux audio via ffmpeg stream-copy after.
+    const nativeMp4 = ['video/mp4;codecs=avc1,mp4a.40.2','video/mp4']
+      .find(m => MediaRecorder.isTypeSupported(m));
 
-    const recorder = new MediaRecorder(videoStream, { mimeType, videoBitsPerSecond: 6_000_000 });
+    const captureStream = canvas.captureStream(30);
+
+    // If using native MP4, add audio track via Web Audio
+    let audioCtx = null;
+    if (nativeMp4) {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        await audioCtx.resume();
+        const src  = audioCtx.createMediaElementSource(videoEl);
+        const dest = audioCtx.createMediaStreamDestination();
+        src.connect(dest);
+        for (const t of dest.stream.getAudioTracks()) captureStream.addTrack(t);
+      } catch(e) { console.warn('[capt] audio attach failed:', e.message); }
+    }
+
+    const mimeType = nativeMp4 || (['video/webm;codecs=vp8','video/webm']
+      .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm');
+
+    const recorder = new MediaRecorder(captureStream, { mimeType, videoBitsPerSecond: 6_000_000 });
     const chunks   = [];
     recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
@@ -1031,14 +1048,15 @@ async function burnCaptions() {
     burnBar.style.width   = '10%';
     burnLabel.textContent = 'Burning captions... 0%';
 
+    function fmtTime(s) {
+      s = Math.max(0, Math.round(s));
+      const m = Math.floor(s / 60), sec = s % 60;
+      return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+    }
+
     await new Promise((resolve, reject) => {
       let rafId;
       const startedAt = Date.now();
-      function fmtSec(s) {
-        s = Math.max(0, Math.round(s));
-        const m = Math.floor(s / 60), sec = s % 60;
-        return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
-      }
       const tick = setInterval(() => {
         if (videoEl.ended) return;
         const elapsed   = (Date.now() - startedAt) / 1000;
@@ -1046,7 +1064,7 @@ async function burnCaptions() {
         const pct       = Math.min(99, Math.round(progress * 88));
         const remaining = progress > 0.01 ? elapsed / progress * (1 - progress) : dur - videoEl.currentTime;
         burnBar.style.width   = (10 + pct) + '%';
-        burnLabel.textContent = `Burning captions... ${pct}% · ${fmtSec(elapsed)} elapsed · ~${fmtSec(remaining)} left`;
+        burnLabel.textContent = `Burning captions... ${pct}% · ${fmtTime(elapsed)} elapsed · ~${fmtTime(remaining)} left`;
       }, 500);
 
       videoEl.onended = () => {
@@ -1069,65 +1087,51 @@ async function burnCaptions() {
     });
 
     URL.revokeObjectURL(videoEl.src);
-    const videoOnlyBlob = new Blob(chunks, { type: mimeType });
+    if (audioCtx) audioCtx.close();
 
-    // ── Encode to MP4 via ffmpeg ──────────────────────────────────────────────
-    // VP8 (canvas) → H.264, audio copied from the original file.
-    // Using the original as the audio source avoids MediaRecorder audio issues.
-    burnBar.style.width   = '97%';
-    burnLabel.textContent = 'Encoding to MP4...';
+    const recordedBlob = new Blob(chunks, { type: mimeType });
+    const isNativeMp4  = mimeType.startsWith('video/mp4');
 
-    let finalBlob = videoOnlyBlob;
-    let finalExt  = 'webm';
-    try {
-      if (!window.__ffmpeg) {
-        const { FFmpeg }               = await import('./ffmpeg/index.js');
-        const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
-        const ff      = new FFmpeg();
-        ff.on('log', ({ message }) => console.log('[ffmpeg]', message));
-        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-        await ff.load({
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        });
-        window.__ffmpeg    = ff;
-        window.__fetchFile = fetchFile;
+    let finalBlob = recordedBlob;
+    let finalExt  = isNativeMp4 ? 'mp4' : 'webm';
+
+    if (!isNativeMp4) {
+      // Mux original audio into the canvas WebM — stream-copy only, no re-encoding
+      burnBar.style.width   = '97%';
+      burnLabel.textContent = 'Adding audio...';
+      try {
+        if (!window.__ffmpeg) {
+          const { FFmpeg }               = await import('./ffmpeg/index.js');
+          const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
+          const ff      = new FFmpeg();
+          const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+          await ff.load({
+            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          });
+          window.__ffmpeg    = ff;
+          window.__fetchFile = fetchFile;
+        }
+        const ff        = window.__ffmpeg;
+        const fetchFile = window.__fetchFile;
+        const origExt   = currentVideoFile.name.split('.').pop() || 'mp4';
+
+        await ff.writeFile('canvas.webm',        await fetchFile(recordedBlob));
+        await ff.writeFile('original.' + origExt, await fetchFile(currentVideoFile));
+
+        const ret = await ff.exec([
+          '-i', 'canvas.webm',
+          '-i', 'original.' + origExt,
+          '-c', 'copy', '-map', '0:v:0', '-map', '1:a:0?',
+          'output.webm',
+        ]);
+        if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
+        const data = await ff.readFile('output.webm');
+        finalBlob  = new Blob([data.buffer], { type: 'video/webm' });
+        try { await ff.deleteFile('canvas.webm'); await ff.deleteFile('original.'+origExt); await ff.deleteFile('output.webm'); } catch(e) {}
+      } catch(e) {
+        console.warn('[capt] audio mux failed:', e.message);
       }
-      const ff        = window.__ffmpeg;
-      const fetchFile = window.__fetchFile;
-      const origExt   = currentVideoFile.name.split('.').pop() || 'mp4';
-
-      burnLabel.textContent = 'Encoding to MP4... (writing files)';
-      await ff.writeFile('video_only.webm', await fetchFile(videoOnlyBlob));
-      await ff.writeFile('original.' + origExt, await fetchFile(currentVideoFile));
-
-      // Fake progress based on wall-clock time since we can't trust WebM duration header
-      const encStart = Date.now();
-      const encTimer = setInterval(() => {
-        const elapsed = Math.round((Date.now() - encStart) / 1000);
-        burnLabel.textContent = `Encoding to MP4... ${elapsed}s`;
-      }, 1000);
-
-      const ret = await ff.exec([
-        '-i', 'video_only.webm',         // canvas video (VP8, no audio)
-        '-i', 'original.' + origExt,     // original file (audio source)
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
-        '-c:a', 'copy',                  // copy audio stream — fast + lossless
-        '-map', '0:v:0',
-        '-map', '1:a:0?',                // optional audio (skipped if none)
-        ...(dur > 0 ? ['-t', String(Math.ceil(dur + 1))] : []),
-        '-movflags', '+faststart',
-        'output.mp4',
-      ]);
-      clearInterval(encTimer);
-
-      if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
-      const data = await ff.readFile('output.mp4');
-      finalBlob = new Blob([data.buffer], { type: 'video/mp4' });
-      finalExt  = 'mp4';
-      try { await ff.deleteFile('video_only.webm'); await ff.deleteFile('original.' + origExt); await ff.deleteFile('output.mp4'); } catch(e) {}
-    } catch(e) {
-      console.warn('[capt] MP4 encoding failed, keeping WebM:', e.message);
     }
 
     burnBar.style.width   = '100%';
