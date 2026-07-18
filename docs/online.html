@@ -897,12 +897,6 @@ function restoreLastSession() {
     currentFileName = localStorage.getItem('capt_last_filename') || 'transcript';
     showResult(saved);
     const box = document.getElementById('transcriptBox');
-    if (savedTime) {
-      const note = document.createElement('div');
-      note.style.cssText = 'font-size:11px;color:var(--muted);margin-top:8px;';
-      note.textContent = 'Restored from ' + savedTime;
-      box.parentNode.insertBefore(note, box.nextSibling);
-    }
   } catch(e) {}
 }
 window.addEventListener('DOMContentLoaded', restoreLastSession);
