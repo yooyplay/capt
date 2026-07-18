@@ -975,8 +975,9 @@ async function burnCaptions() {
       setTimeout(res, 8000);
     });
 
-    const vw = videoEl.videoWidth  || 1280;
-    const vh = videoEl.videoHeight || 720;
+    const vw  = videoEl.videoWidth  || 1280;
+    const vh  = videoEl.videoHeight || 720;
+    const dur = videoEl.duration    || 0;
 
     // Off-screen canvas for compositing
     const canvas = document.createElement('canvas');
@@ -998,8 +999,8 @@ async function burnCaptions() {
       console.warn('[capt] audio capture skipped:', e.message);
     }
 
-    // Pick best supported format
-    const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']
+    // Pick best supported format — try MP4 first (native on Safari, avoids post-conversion)
+    const mimeType = ['video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']
       .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
 
     const recorder = new MediaRecorder(outStream, { mimeType, videoBitsPerSecond: 8_000_000 });
@@ -1096,48 +1097,51 @@ async function burnCaptions() {
 
     const webmBlob = new Blob(chunks, { type: mimeType });
 
-    // Try to convert WebM → MP4 via ffmpeg.wasm (no filter, just remux/transcode)
-    let finalBlob = webmBlob, finalExt = 'webm';
-    try {
-      burnBar.style.width   = '97%';
-      burnLabel.textContent = 'Converting to MP4...';
+    // If MediaRecorder already gave us MP4 (Safari), skip conversion entirely
+    const isAlreadyMp4 = mimeType.startsWith('video/mp4');
+    let finalBlob = webmBlob;
+    let finalExt  = isAlreadyMp4 ? 'mp4' : 'webm';
 
-      if (!window.__ffmpeg) {
-        const { FFmpeg }          = await import('./ffmpeg/index.js');
-        const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
-        const ff = new FFmpeg();
-        ff.on('progress', ({ progress }) => {
-          // WebM from MediaRecorder has no duration header so progress can be invalid
-          const pct = Math.min(99, Math.max(0, Math.round(progress * 100)));
-          burnLabel.textContent = pct > 0 ? `Converting to MP4... ${pct}%` : 'Converting to MP4...';
-        });
-        const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
-        await ff.load({
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-        });
-        window.__ffmpeg    = ff;
-        window.__fetchFile = fetchFile;
+    if (!isAlreadyMp4) {
+      // Try WebM → MP4 via ffmpeg; ultrafast preset + explicit duration to avoid hangs
+      try {
+        burnBar.style.width   = '97%';
+        burnLabel.textContent = 'Converting to MP4...';
+
+        if (!window.__ffmpeg) {
+          const { FFmpeg }               = await import('./ffmpeg/index.js');
+          const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
+          const ff = new FFmpeg();
+          const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+          await ff.load({
+            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+          });
+          window.__ffmpeg    = ff;
+          window.__fetchFile = fetchFile;
+        }
+        const ff        = window.__ffmpeg;
+        const fetchFile = window.__fetchFile;
+
+        await ff.writeFile('captioned.webm', await fetchFile(webmBlob));
+        const args = ['-i', 'captioned.webm'];
+        if (dur > 0) args.push('-t', String(Math.ceil(dur)));   // stop at known duration
+        args.push(
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-movflags', '+faststart',
+          'output.mp4'
+        );
+        const ret = await ff.exec(args);
+        if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
+
+        const data = await ff.readFile('output.mp4');
+        finalBlob = new Blob([data.buffer], { type: 'video/mp4' });
+        finalExt  = 'mp4';
+        try { await ff.deleteFile('captioned.webm'); await ff.deleteFile('output.mp4'); } catch(e) {}
+      } catch(e) {
+        console.warn('[capt] MP4 conversion failed, keeping WebM:', e.message);
       }
-      const ff        = window.__ffmpeg;
-      const fetchFile = window.__fetchFile;
-
-      await ff.writeFile('captioned.webm', await fetchFile(webmBlob));
-      const ret = await ff.exec([
-        '-i', 'captioned.webm',
-        '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-movflags', '+faststart',
-        'output.mp4',
-      ]);
-      if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
-
-      const data = await ff.readFile('output.mp4');
-      finalBlob = new Blob([data.buffer], { type: 'video/mp4' });
-      finalExt  = 'mp4';
-      try { await ff.deleteFile('captioned.webm'); await ff.deleteFile('output.mp4'); } catch(e) {}
-    } catch(e) {
-      console.warn('[capt] MP4 conversion failed, keeping WebM:', e.message);
     }
 
     burnBar.style.width   = '100%';
