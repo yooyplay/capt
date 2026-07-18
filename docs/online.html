@@ -1071,9 +1071,11 @@ async function burnCaptions() {
     URL.revokeObjectURL(videoEl.src);
     const videoOnlyBlob = new Blob(chunks, { type: mimeType });
 
-    // ── Mux audio from original via ffmpeg (stream copy — very fast) ──────────
+    // ── Encode to MP4 via ffmpeg ──────────────────────────────────────────────
+    // VP8 (canvas) → H.264, audio copied from the original file.
+    // Using the original as the audio source avoids MediaRecorder audio issues.
     burnBar.style.width   = '97%';
-    burnLabel.textContent = 'Adding audio...';
+    burnLabel.textContent = 'Encoding to MP4...';
 
     let finalBlob = videoOnlyBlob;
     let finalExt  = 'webm';
@@ -1082,6 +1084,7 @@ async function burnCaptions() {
         const { FFmpeg }               = await import('./ffmpeg/index.js');
         const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
         const ff      = new FFmpeg();
+        ff.on('log', ({ message }) => console.log('[ffmpeg]', message));
         const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
         await ff.load({
           coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
@@ -1094,30 +1097,42 @@ async function burnCaptions() {
       const fetchFile = window.__fetchFile;
       const origExt   = currentVideoFile.name.split('.').pop() || 'mp4';
 
+      burnLabel.textContent = 'Encoding to MP4... (writing files)';
       await ff.writeFile('video_only.webm', await fetchFile(videoOnlyBlob));
       await ff.writeFile('original.' + origExt, await fetchFile(currentVideoFile));
 
-      // Stream-copy both video (canvas) and audio (original) — no re-encoding
-      const ret = await ff.exec([
-        '-i', 'video_only.webm',
-        '-i', 'original.' + origExt,
-        '-c', 'copy',
-        '-map', '0:v:0',
-        '-map', '1:a:0?',   // optional: no error if no audio track
-        'output.webm',
-      ]);
-      if (ret !== 0) throw new Error(`mux exited ${ret}`);
+      // Fake progress based on wall-clock time since we can't trust WebM duration header
+      const encStart = Date.now();
+      const encTimer = setInterval(() => {
+        const elapsed = Math.round((Date.now() - encStart) / 1000);
+        burnLabel.textContent = `Encoding to MP4... ${elapsed}s`;
+      }, 1000);
 
-      const data = await ff.readFile('output.webm');
-      finalBlob  = new Blob([data.buffer], { type: 'video/webm' });
-      try { await ff.deleteFile('video_only.webm'); await ff.deleteFile('original.' + origExt); await ff.deleteFile('output.webm'); } catch(e) {}
+      const ret = await ff.exec([
+        '-i', 'video_only.webm',         // canvas video (VP8, no audio)
+        '-i', 'original.' + origExt,     // original file (audio source)
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+        '-c:a', 'copy',                  // copy audio stream — fast + lossless
+        '-map', '0:v:0',
+        '-map', '1:a:0?',                // optional audio (skipped if none)
+        ...(dur > 0 ? ['-t', String(Math.ceil(dur + 1))] : []),
+        '-movflags', '+faststart',
+        'output.mp4',
+      ]);
+      clearInterval(encTimer);
+
+      if (ret !== 0) throw new Error(`ffmpeg exited ${ret}`);
+      const data = await ff.readFile('output.mp4');
+      finalBlob = new Blob([data.buffer], { type: 'video/mp4' });
+      finalExt  = 'mp4';
+      try { await ff.deleteFile('video_only.webm'); await ff.deleteFile('original.' + origExt); await ff.deleteFile('output.mp4'); } catch(e) {}
     } catch(e) {
-      console.warn('[capt] audio mux failed, keeping video-only WebM:', e.message);
+      console.warn('[capt] MP4 encoding failed, keeping WebM:', e.message);
     }
 
     burnBar.style.width   = '100%';
     burnLabel.textContent = 'Done!';
-    document.getElementById('burnFormatNote').style.display = 'block';
+    document.getElementById('burnFormatNote').style.display = finalExt === 'webm' ? 'block' : 'none';
 
     const a = document.createElement('a');
     a.href     = URL.createObjectURL(finalBlob);
