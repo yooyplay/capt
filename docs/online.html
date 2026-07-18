@@ -946,7 +946,8 @@ async function burnCaptions() {
     // Load bundled font into the browser so Canvas 2D renders it correctly
     if (!window.__captFont) {
       burnLabel.textContent = 'Loading font...';
-      const face = new FontFace('CaptFont', 'url(font.ttf)');
+      const fontURL = new URL('font.ttf', window.location.href).href;
+      const face = new FontFace('CaptFont', `url(${fontURL})`);
       await face.load();
       document.fonts.add(face);
       window.__captFont = true;
@@ -972,16 +973,19 @@ async function burnCaptions() {
     canvas.height = vh;
     const ctx = canvas.getContext('2d');
 
-    // Capture audio via Web Audio (routes around the muted attribute)
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    await audioCtx.resume();
-    const audioSrc  = audioCtx.createMediaElementSource(videoEl);
-    const audioDest = audioCtx.createMediaStreamDestination();
-    audioSrc.connect(audioDest); // capture only — do NOT connect to speakers
-
-    // Combine canvas video stream + audio tracks
+    // Combine canvas video stream + audio tracks (audio may be absent on some videos)
     const outStream = canvas.captureStream(60);
-    for (const t of audioDest.stream.getAudioTracks()) outStream.addTrack(t);
+    let audioCtx = null;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+      const audioSrc  = audioCtx.createMediaElementSource(videoEl);
+      const audioDest = audioCtx.createMediaStreamDestination();
+      audioSrc.connect(audioDest);
+      for (const t of audioDest.stream.getAudioTracks()) outStream.addTrack(t);
+    } catch(e) {
+      console.warn('[capt] audio capture skipped:', e.message);
+    }
 
     // Pick best supported format
     const mimeType = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm']
@@ -1080,7 +1084,7 @@ async function burnCaptions() {
     burnLabel.textContent = 'Done!';
 
     URL.revokeObjectURL(videoEl.src);
-    audioCtx.close();
+    if (audioCtx) audioCtx.close();
 
     const blob = new Blob(chunks, { type: mimeType });
     const a = document.createElement('a');
