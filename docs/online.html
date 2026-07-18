@@ -809,6 +809,49 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
   showResult(transcript);
 }
 
+function buildDrawtextVF(segs) {
+  syncStyleFromUI();
+  const fs   = captStyle.fontSize;
+  const stripH = Math.round(fs * 2.6);
+  const tc   = '0x' + captStyle.textColor.slice(1).toUpperCase();
+  const bc   = '0x' + captStyle.bgColor.slice(1).toUpperCase();
+  const op   = captStyle.bgOpacity.toFixed(2);
+
+  // drawtext uses `h` (not `ih`) for video height in y= expressions
+  let stripY, textY;
+  if (captStyle.position === 'top') {
+    stripY = '0';
+    textY  = `${Math.round(stripH / 2)}-th/2`;
+  } else if (captStyle.position === 'center') {
+    stripY = `(ih-${stripH})/2`;
+    textY  = `(h-th)/2`;
+  } else {
+    stripY = `ih-${stripH}`;
+    textY  = `h-${Math.round(stripH / 2)}-th/2`;
+  }
+
+  function escText(t) {
+    return t.replace(/\\/g, '\\\\')
+            .replace(/'/g, '\u2019')
+            .replace(/:/g, '\\:')
+            .replace(/%/g, '\\%');
+  }
+
+  const parts = [];
+  for (const seg of segs) {
+    const text = escText((seg.text || '').trim());
+    if (!text) continue;
+    const [s, e] = seg.timestamp || [0, 1];
+    const en = `between(t,${s.toFixed(3)},${e.toFixed(3)})`;
+
+    if (captStyle.bgEnabled && captStyle.bgOpacity > 0) {
+      parts.push(`drawbox=y=${stripY}:w=iw:h=${stripH}:color=${bc}@${op}:t=fill:enable='${en}'`);
+    }
+    parts.push(`drawtext=text='${text}':fontsize=${fs}:fontcolor=${tc}:x=(w-tw)/2:y=${textY}:enable='${en}'`);
+  }
+  return parts.length ? parts.join(',') : 'null';
+}
+
 // ── Rechunking ────────────────────────────────────────────────────────────────
 function rechunkByWords(chunks, maxWords) {
   // Flatten chunks → per-word entries with interpolated timestamps
@@ -935,26 +978,19 @@ async function burnCaptions() {
     burnBar.style.width = '10%';
     burnLabel.textContent = 'Preparing files...';
 
-    // Build SRT
-    let srt = '';
-    segments.forEach((seg, i) => {
-      const [start, end] = seg.timestamp || [0, 1];
-      srt += (i+1) + '\n' + toSRTTime(start) + ' --> ' + toSRTTime(end) + '\n' + seg.text.trim() + '\n\n';
-    });
-
     const ext = currentVideoFile.name.split('.').pop() || 'mp4';
     await ff.writeFile('input.' + ext, await fetchFile(currentVideoFile));
-    await ff.writeFile('subs.srt', srt);
 
     burnBar.style.width = '15%';
     burnLabel.textContent = 'Burning captions...';
 
-    // Burn subtitles using subtitles filter with current style
+    // Build drawtext/drawbox filter chain (same approach as Mac app, avoids libass/font issues)
     syncStyleFromUI();
-    const forceStyle = buildForceStyle();
+    const vf = buildDrawtextVF(segments);
+
     await ff.exec([
       '-i', 'input.' + ext,
-      '-vf', `subtitles=subs.srt:force_style='${forceStyle}'`,
+      '-vf', vf,
       '-c:a', 'copy',
       'output.' + ext
     ]);
@@ -972,7 +1008,6 @@ async function burnCaptions() {
     // Cleanup
     await ff.deleteFile('input.' + ext);
     await ff.deleteFile('output.' + ext);
-    await ff.deleteFile('subs.srt');
 
   } catch (err) {
     burnLabel.textContent = 'Error: ' + err.message;
