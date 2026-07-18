@@ -1107,7 +1107,9 @@ async function burnCaptions() {
         const { fetchFile, toBlobURL } = await import('./ffmpeg-util/index.js');
         const ff = new FFmpeg();
         ff.on('progress', ({ progress }) => {
-          burnLabel.textContent = `Converting to MP4... ${Math.round(progress * 100)}%`;
+          // WebM from MediaRecorder has no duration header so progress can be invalid
+          const pct = Math.min(99, Math.max(0, Math.round(progress * 100)));
+          burnLabel.textContent = pct > 0 ? `Converting to MP4... ${pct}%` : 'Converting to MP4...';
         });
         const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
         await ff.load({
