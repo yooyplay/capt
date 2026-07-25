@@ -634,7 +634,7 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
   setProgress(65, 'Transcribing...');
   log('Running Whisper...' + (scriptHint ? ' (script hint active)' : ''));
 
-  const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 };
+  const opts = { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 5 };
   if (scriptHint) opts.initial_prompt = scriptHint.split(/[.!?]/)[0].trim() + '.';
 
   const result = await transcriber(audio, opts);
