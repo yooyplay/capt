@@ -1093,7 +1093,7 @@ async function burnCaptions() {
     const nativeMp4 = ['video/mp4;codecs=avc1,mp4a.40.2','video/mp4']
       .find(m => MediaRecorder.isTypeSupported(m));
 
-    const canvasStream = canvas.captureStream(0); // pull mode: only emit frames we push
+    const canvasStream = canvas.captureStream(30);
     const outTracks    = [...canvasStream.getVideoTracks()];
 
     let audioCtx = null;
@@ -1176,7 +1176,7 @@ async function burnCaptions() {
 
     await new Promise((resolve, reject) => {
       let rafId;
-      const videoTrack = canvasStream.getVideoTracks()[0];
+      const videoTrack = canvasStream.getVideoTracks()[0]; // kept for future use
       const useRVFC    = 'requestVideoFrameCallback' in videoEl;
       const startedAt  = Date.now();
 
@@ -1194,18 +1194,16 @@ async function burnCaptions() {
         clearInterval(tick);
         if (rafId) cancelAnimationFrame(rafId);
         ctx.drawImage(videoEl, 0, 0, vw, vh);
-        if (videoTrack) videoTrack.requestFrame();
         setTimeout(() => recorder.stop(), 400);
       };
       recorder.onstop  = resolve;
       recorder.onerror = e => reject(e.error || e);
 
-      // rVFC path: fires exactly once per decoded video frame — frame-accurate sync
+      // rVFC path: fires exactly once per decoded video frame — accurate subtitle timing
       function onFrame(now, meta) {
         if (videoEl.ended) return;
         ctx.drawImage(videoEl, 0, 0, vw, vh);
-        drawSubtitle(meta.mediaTime); // mediaTime is the exact frame presentation time
-        videoTrack.requestFrame();    // push this frame into the captureStream
+        drawSubtitle(meta.mediaTime); // exact frame presentation time, no currentTime lag
         videoEl.requestVideoFrameCallback(onFrame);
       }
 
@@ -1222,14 +1220,13 @@ async function burnCaptions() {
         }
         lastT = t;
         drawSubtitle(t);
-        videoTrack.requestFrame();
         rafId = requestAnimationFrame(loop);
       }
 
       videoEl.addEventListener('waiting', () => videoEl.play().catch(() => {}));
       videoEl.playsInline = true;
+      recorder.start(200);
       videoEl.play().then(() => {
-        recorder.start(200); // start after video is playing to avoid audio/video offset
         if (useRVFC) {
           videoEl.requestVideoFrameCallback(onFrame);
         } else {
