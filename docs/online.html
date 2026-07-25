@@ -1180,12 +1180,25 @@ async function burnCaptions() {
       recorder.onerror = e => reject(e.error || e);
       recorder.start(200);
 
+      // Detect when currentTime stops advancing (video element stalled while
+      // audio continues via WebAudio buffer). After ~60 stale frames (~1s at
+      // 60fps) force play() again to unstick it.
+      let lastT = -1, stuckFrames = 0;
       function loop() {
         if (videoEl.ended) return;
         ctx.drawImage(videoEl, 0, 0, vw, vh);
-        drawSubtitle(videoEl.currentTime);
+        const t = videoEl.currentTime;
+        if (t === lastT && !videoEl.paused) {
+          if (++stuckFrames > 60) { videoEl.play().catch(() => {}); stuckFrames = 0; }
+        } else {
+          stuckFrames = 0;
+        }
+        lastT = t;
+        drawSubtitle(t);
         rafId = requestAnimationFrame(loop);
       }
+      videoEl.addEventListener('waiting', () => videoEl.play().catch(() => {}));
+      videoEl.playsInline = true;
       videoEl.play().then(() => { rafId = requestAnimationFrame(loop); }).catch(reject);
     });
 
