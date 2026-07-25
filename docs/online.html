@@ -795,24 +795,29 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
 
   // Load wav2vec2
   log('Loading wav2vec2 alignment model...');
-  setProgress(5, 'Downloading alignment model (~95 MB, first time only)...');
+  setProgress(5, 'Loading alignment model...');
+
+  // Track whether a real network download is happening.
+  // transformers.js fires status='downloading' only for actual network fetches;
+  // cached loads skip straight to 'done', so we only show the size warning then.
+  let downloading = false;
+  const onProgress = (base) => (p) => {
+    if (p.status === 'downloading' || (p.status === 'progress' && p.total > 1e6)) {
+      if (!downloading) {
+        downloading = true;
+        setProgress(5, 'Downloading alignment model (~95 MB, first time only)...');
+      }
+      const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
+      setProgress(base + pct, (base === 0 ? 'Downloading processor' : 'Downloading model weights') + '... ' + (base + pct) + '%');
+    }
+  };
 
   const processor = await AutoProcessor.from_pretrained('Xenova/wav2vec2-base-960h', {
-    progress_callback: (p) => {
-      if (p.status === 'downloading') {
-        const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
-        setProgress(pct, 'Downloading alignment model... ' + pct + '%');
-      }
-    }
+    progress_callback: onProgress(0)
   });
 
   const model = await Wav2Vec2ForCTC.from_pretrained('Xenova/wav2vec2-base-960h', {
-    progress_callback: (p) => {
-      if (p.status === 'downloading') {
-        const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
-        setProgress(40 + pct, 'Loading model weights... ' + (40 + pct) + '%');
-      }
-    }
+    progress_callback: onProgress(40)
   });
 
   log('Model loaded. Running acoustic model on audio...');
