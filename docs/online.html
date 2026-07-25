@@ -1093,7 +1093,7 @@ async function burnCaptions() {
     const nativeMp4 = ['video/mp4;codecs=avc1,mp4a.40.2','video/mp4']
       .find(m => MediaRecorder.isTypeSupported(m));
 
-    const canvasStream = canvas.captureStream(30);
+    const canvasStream = canvas.captureStream(0); // pull mode: only emit frames we push
     const outTracks    = [...canvasStream.getVideoTracks()];
 
     let audioCtx = null;
@@ -1176,7 +1176,10 @@ async function burnCaptions() {
 
     await new Promise((resolve, reject) => {
       let rafId;
-      const startedAt = Date.now();
+      const videoTrack = canvasStream.getVideoTracks()[0];
+      const useRVFC    = 'requestVideoFrameCallback' in videoEl;
+      const startedAt  = Date.now();
+
       const tick = setInterval(() => {
         if (videoEl.ended) return;
         const elapsed   = (Date.now() - startedAt) / 1000;
@@ -1189,17 +1192,24 @@ async function burnCaptions() {
 
       videoEl.onended = () => {
         clearInterval(tick);
-        cancelAnimationFrame(rafId);
+        if (rafId) cancelAnimationFrame(rafId);
         ctx.drawImage(videoEl, 0, 0, vw, vh);
+        if (videoTrack) videoTrack.requestFrame();
         setTimeout(() => recorder.stop(), 400);
       };
       recorder.onstop  = resolve;
       recorder.onerror = e => reject(e.error || e);
-      recorder.start(200);
 
-      // Detect when currentTime stops advancing (video element stalled while
-      // audio continues via WebAudio buffer). After ~60 stale frames (~1s at
-      // 60fps) force play() again to unstick it.
+      // rVFC path: fires exactly once per decoded video frame — frame-accurate sync
+      function onFrame(now, meta) {
+        if (videoEl.ended) return;
+        ctx.drawImage(videoEl, 0, 0, vw, vh);
+        drawSubtitle(meta.mediaTime); // mediaTime is the exact frame presentation time
+        videoTrack.requestFrame();    // push this frame into the captureStream
+        videoEl.requestVideoFrameCallback(onFrame);
+      }
+
+      // RAF fallback for browsers without rVFC (Firefox)
       let lastT = -1, stuckFrames = 0;
       function loop() {
         if (videoEl.ended) return;
@@ -1212,11 +1222,20 @@ async function burnCaptions() {
         }
         lastT = t;
         drawSubtitle(t);
+        videoTrack.requestFrame();
         rafId = requestAnimationFrame(loop);
       }
+
       videoEl.addEventListener('waiting', () => videoEl.play().catch(() => {}));
       videoEl.playsInline = true;
-      videoEl.play().then(() => { rafId = requestAnimationFrame(loop); }).catch(reject);
+      videoEl.play().then(() => {
+        recorder.start(200); // start after video is playing to avoid audio/video offset
+        if (useRVFC) {
+          videoEl.requestVideoFrameCallback(onFrame);
+        } else {
+          rafId = requestAnimationFrame(loop);
+        }
+      }).catch(reject);
     });
 
     URL.revokeObjectURL(videoEl.src);
