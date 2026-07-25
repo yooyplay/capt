@@ -281,15 +281,6 @@
         </div>
       </div>
 
-      <!-- Words per caption -->
-      <div class="style-row">
-        <span class="style-label">Words/caption</span>
-        <div class="stepper">
-          <button onclick="stepChunk(-1)">−</button>
-          <span id="sChunkVal">5</span>
-          <button onclick="stepChunk(1)">+</button>
-        </div>
-      </div>
 
     </div>
   </div>
@@ -373,7 +364,6 @@ const captStyle = {
   bold:      true,
   italic:    false,
   position:  'bottom',
-  chunkSize: 5,
 };
 
 function hexToASS(hex, alphaFloat = 0) {
@@ -479,10 +469,6 @@ function setPosition(pos) {
   updatePreview();
 }
 
-function stepChunk(delta) {
-  captStyle.chunkSize = Math.max(1, Math.min(15, captStyle.chunkSize + delta));
-  document.getElementById('sChunkVal').textContent = captStyle.chunkSize;
-}
 
 function syncStyleFromUI() {
   captStyle.fontSize  = parseInt(document.getElementById('sFontSize').value);
@@ -656,9 +642,8 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
   log('Transcription complete.');
 
   transcript = result.text;
-  // Re-chunk by word count if user set a chunk size
   const rawChunks = result.chunks || [];
-  segments = rechunkByWords(rawChunks, captStyle.chunkSize);
+  segments = rechunkDynamic(rawChunks);
   showResult(transcript);
 }
 
@@ -758,7 +743,7 @@ function bandedViterbiAlign(logProbs, T, V, tokens) {
  * Group character token frames into word timestamps.
  * Uses the original script text to reconstruct word boundaries.
  */
-function tokenFramesToSegments(tokenFrames, tokens, scriptText, T, chunkSize = 5) {
+function tokenFramesToSegments(tokenFrames, tokens, scriptText, T) {
   const norm = scriptText.toUpperCase().replace(/[^A-Z' ]/g, ' ').replace(/\s+/g, ' ').trim();
 
   // Build list of words with their token ranges
@@ -795,15 +780,8 @@ function tokenFramesToSegments(tokenFrames, tokens, scriptText, T, chunkSize = 5
     }
   }
 
-  // Group into subtitle chunks
-  const chunks = [];
-  for (let i = 0; i < wordTimestamps.length; i += chunkSize) {
-    const group = wordTimestamps.slice(i, i + chunkSize);
-    chunks.push({
-      text: group.map(w => w.text).join(' '),
-      timestamp: [group[0].start, group[group.length-1].end],
-    });
-  }
+  // Group into subtitle chunks dynamically by duration
+  const chunks = rechunkDynamic(wordTimestamps.map(w => ({ text: w.text, timestamp: [w.start, w.end] })));
 
   return {
     text: wordTimestamps.map(w => w.text).join(' '),
@@ -879,7 +857,7 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
   const tokenFrames = bandedViterbiAlign(logProbs, T, V, tokens);
   log('Alignment done. Grouping into subtitle chunks...');
 
-  const result = tokenFramesToSegments(tokenFrames, tokens, scriptText, T, captStyle.chunkSize);
+  const result = tokenFramesToSegments(tokenFrames, tokens, scriptText, T);
 
   setProgress(100, 'Done!');
   log(`Created ${result.chunks.length} subtitle chunks.`);
@@ -946,21 +924,32 @@ function buildDrawtextVF(segs, vw, vh) {
 }
 
 // ── Rechunking ────────────────────────────────────────────────────────────────
-function rechunkByWords(chunks, maxWords) {
-  // Flatten chunks → per-word entries with interpolated timestamps
+// Groups words into caption chunks based on speech duration (~2.5s each).
+// Fast speech = more words per chunk; slow speech = fewer. No fixed word count.
+function rechunkDynamic(chunks, targetDuration = 2.5, maxWords = 10) {
+  // Flatten to word-level with interpolated timestamps
   const words = [];
   for (const chunk of chunks) {
     const ws = chunk.text.trim().split(/\s+/).filter(Boolean);
     const [start, end] = chunk.timestamp || [0, 0];
-    const dur = ws.length > 1 ? (end - start) / ws.length : (end - start);
-    ws.forEach((w, i) => words.push({ text: w, start: start + i * dur, end: start + (i + 1) * dur }));
+    const wordDur = ws.length > 1 ? (end - start) / ws.length : (end - start);
+    ws.forEach((w, i) => words.push({ text: w, start: start + i * wordDur, end: start + (i + 1) * wordDur }));
   }
   if (!words.length) return chunks;
-  // Group into maxWords-sized caption blocks
+
   const result = [];
-  for (let i = 0; i < words.length; i += maxWords) {
-    const group = words.slice(i, i + maxWords);
-    result.push({ text: group.map(w => w.text).join(' '), timestamp: [group[0].start, group[group.length - 1].end] });
+  let current = [];
+  for (const w of words) {
+    current.push(w);
+    const duration = current[current.length - 1].end - current[0].start;
+    const isSentenceEnd = /[.!?…]$/.test(w.text.trim());
+    if ((duration >= targetDuration && current.length >= 2) || isSentenceEnd || current.length >= maxWords) {
+      result.push({ text: current.map(x => x.text).join(' '), timestamp: [current[0].start, current[current.length - 1].end] });
+      current = [];
+    }
+  }
+  if (current.length) {
+    result.push({ text: current.map(x => x.text).join(' '), timestamp: [current[0].start, current[current.length - 1].end] });
   }
   return result;
 }
