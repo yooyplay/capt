@@ -805,7 +805,7 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
         setProgress(5, 'Downloading alignment model (~95 MB, first time only)...');
       }
       const pct = p.loaded && p.total ? Math.round(p.loaded / p.total * 40) : 10;
-      setProgress(base + pct, (base === 0 ? 'Downloading processor' : 'Downloading model weights') + '... ' + (base + pct) + '%');
+      setProgress(base + pct, 'Downloading alignment model... ' + (base + pct) + '%');
     }
   };
 
@@ -853,12 +853,14 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
     log(`Chunk ${ci + 1}/${numChunks}: ${tStart.toFixed(0)}–${tEnd.toFixed(0)}s, tokens ${tokStart}–${tokEnd - 1}`);
 
     const inputs = await processor(chunkAudio, { sampling_rate: SR });
+    await new Promise(r => setTimeout(r, 0)); // yield before heavy inference
     const { logits } = await model(inputs);
     const T = logits.dims[1];
     const V = logits.dims[2];
     const raw = logits.data;
 
     // Log-softmax per frame
+    await new Promise(r => setTimeout(r, 0)); // yield before log-softmax loop
     const logProbs = new Float32Array(T * V);
     for (let t = 0; t < T; t++) {
       const off = t * V;
@@ -870,6 +872,7 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
       for (let v = 0; v < V; v++) logProbs[off + v] = raw[off + v] - logSum;
     }
 
+    await new Promise(r => setTimeout(r, 0)); // yield before Viterbi
     const chunkFrames = bandedViterbiAlign(logProbs, T, V, chunkTokens);
 
     // Convert chunk-local frames to global frames
