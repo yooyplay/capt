@@ -793,13 +793,10 @@ function tokenFramesToSegments(tokenFrames, tokens, scriptText, T) {
 async function runForceAlign(audio, scriptText, log, setProgress) {
   const { AutoProcessor, Wav2Vec2ForCTC } = window.__transformers;
 
-  // Load wav2vec2
   log('Loading wav2vec2 alignment model...');
   setProgress(5, 'Loading alignment model...');
 
-  // Track whether a real network download is happening.
-  // transformers.js fires status='downloading' only for actual network fetches;
-  // cached loads skip straight to 'done', so we only show the size warning then.
+  // Only show download message when bytes are actually flowing over the network.
   let downloading = false;
   const onProgress = (base) => (p) => {
     if (p.status === 'downloading' || (p.status === 'progress' && p.total > 1e6)) {
@@ -815,55 +812,77 @@ async function runForceAlign(audio, scriptText, log, setProgress) {
   const processor = await AutoProcessor.from_pretrained('Xenova/wav2vec2-base-960h', {
     progress_callback: onProgress(0)
   });
-
   const model = await Wav2Vec2ForCTC.from_pretrained('Xenova/wav2vec2-base-960h', {
     progress_callback: onProgress(40)
   });
 
-  log('Model loaded. Running acoustic model on audio...');
-  setProgress(82, 'Running wav2vec2 on audio...');
-
-  // Process audio: wav2vec2 expects raw 16kHz float32
-  const inputs = await processor(audio, { sampling_rate: 16000 });
-  const { logits } = await model(inputs);
-
-  // logits: Tensor shape [1, T, V]
-  const T = logits.dims[1];
-  const V = logits.dims[2];
-  const rawLogits = logits.data; // Float32Array, flat [1, T, V]
-
-  // Log-softmax per frame (needed for valid CTC probabilities)
-  log(`Acoustic frames: ${T} (${(T / W2V_FPS).toFixed(1)}s). Computing log-softmax...`);
-  const logProbs = new Float32Array(T * V);
-  for (let t = 0; t < T; t++) {
-    const offset = t * V;
-    let maxVal = rawLogits[offset];
-    for (let v = 1; v < V; v++) if (rawLogits[offset + v] > maxVal) maxVal = rawLogits[offset + v];
-    let sumExp = 0;
-    for (let v = 0; v < V; v++) sumExp += Math.exp(rawLogits[offset + v] - maxVal);
-    const logSum = Math.log(sumExp) + maxVal;
-    for (let v = 0; v < V; v++) logProbs[offset + v] = rawLogits[offset + v] - logSum;
-  }
-
-  setProgress(88, 'Running CTC forced alignment...');
-  log('Aligning script to audio with band-limited Viterbi...');
-
   const tokens = scriptToTokenIds(scriptText);
-  log(`Script tokens: ${tokens.length} characters`);
-
   if (tokens.length === 0) {
     log('Error: script contains no recognizable characters.');
     setProgress(0, 'Script error.');
     return;
   }
-  if (tokens.length > T * 0.9) {
-    log('Warning: script may be too long for this audio. Results may be inaccurate.');
+
+  // Process audio in 30-second chunks to stay within WebAssembly memory limits.
+  // wav2vec2's Transformer attention is O(T²) — a 103-second audio (~5100 frames)
+  // exhausts memory mid-way through, causing alignment to freeze partway through the script.
+  const SR = 16000;
+  const CHUNK_SEC = 30;
+  const audioDur   = audio.length / SR;
+  const numChunks  = Math.max(1, Math.ceil(audioDur / CHUNK_SEC));
+  const totalFrames = Math.round(audioDur * W2V_FPS);
+
+  log(`Model loaded. Audio: ${audioDur.toFixed(1)}s → ${numChunks} chunk(s), ${tokens.length} script tokens.`);
+
+  // Will hold global frame index for each token
+  const allTokenFrames = new Int32Array(tokens.length);
+
+  for (let ci = 0; ci < numChunks; ci++) {
+    const tStart = ci * CHUNK_SEC;
+    const tEnd   = Math.min(audioDur, (ci + 1) * CHUNK_SEC);
+    const chunkAudio = audio.slice(Math.round(tStart * SR), Math.round(tEnd * SR));
+
+    // Proportional token range for this chunk
+    const tokStart    = Math.round(ci * tokens.length / numChunks);
+    const tokEnd      = Math.round((ci + 1) * tokens.length / numChunks);
+    const chunkTokens = tokens.slice(tokStart, tokEnd);
+    if (!chunkTokens.length) continue;
+
+    const pct = 82 + Math.round((ci / numChunks) * 15);
+    setProgress(pct, `Aligning audio${numChunks > 1 ? ` (${ci + 1}/${numChunks})` : ''}...`);
+    log(`Chunk ${ci + 1}/${numChunks}: ${tStart.toFixed(0)}–${tEnd.toFixed(0)}s, tokens ${tokStart}–${tokEnd - 1}`);
+
+    const inputs = await processor(chunkAudio, { sampling_rate: SR });
+    const { logits } = await model(inputs);
+    const T = logits.dims[1];
+    const V = logits.dims[2];
+    const raw = logits.data;
+
+    // Log-softmax per frame
+    const logProbs = new Float32Array(T * V);
+    for (let t = 0; t < T; t++) {
+      const off = t * V;
+      let maxVal = raw[off];
+      for (let v = 1; v < V; v++) if (raw[off + v] > maxVal) maxVal = raw[off + v];
+      let sumExp = 0;
+      for (let v = 0; v < V; v++) sumExp += Math.exp(raw[off + v] - maxVal);
+      const logSum = Math.log(sumExp) + maxVal;
+      for (let v = 0; v < V; v++) logProbs[off + v] = raw[off + v] - logSum;
+    }
+
+    const chunkFrames = bandedViterbiAlign(logProbs, T, V, chunkTokens);
+
+    // Convert chunk-local frames to global frames
+    const frameOffset = Math.round(tStart * W2V_FPS);
+    for (let i = 0; i < chunkFrames.length; i++) {
+      allTokenFrames[tokStart + i] = chunkFrames[i] + frameOffset;
+    }
   }
 
-  const tokenFrames = bandedViterbiAlign(logProbs, T, V, tokens);
+  setProgress(98, 'Grouping into caption chunks...');
   log('Alignment done. Grouping into subtitle chunks...');
 
-  const result = tokenFramesToSegments(tokenFrames, tokens, scriptText, T);
+  const result = tokenFramesToSegments(allTokenFrames, tokens, scriptText, totalFrames);
 
   setProgress(100, 'Done!');
   log(`Created ${result.chunks.length} subtitle chunks.`);
