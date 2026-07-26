@@ -1054,23 +1054,7 @@ async function burnCaptions() {
   try {
     syncStyleFromUI();
 
-    // ── Load font ─────────────────────────────────────────────────────────────
-    if (!window.__captFont) {
-      burnLabel.textContent = 'Loading font...';
-      try {
-        const fontURL = new URL('font.ttf', window.location.href).href;
-        const resp    = await fetch(fontURL);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const face = new FontFace('CaptFont', await resp.arrayBuffer());
-        await face.load();
-        document.fonts.add(face);
-        window.__captFont = 'CaptFont';
-      } catch(e) {
-        console.warn('[capt] font unavailable, using Arial:', e.message);
-        window.__captFont = 'Arial';
-      }
-    }
-    const fontFamily = window.__captFont || 'Arial';
+    const fontFamily = 'Arial';
 
     // ── Load video metadata ───────────────────────────────────────────────────
     burnLabel.textContent = 'Loading video...';
@@ -1078,9 +1062,9 @@ async function burnCaptions() {
     videoEl.src      = URL.createObjectURL(currentVideoFile);
     videoEl.preload  = 'auto';
     await new Promise((res, rej) => {
-      videoEl.onloadedmetadata = res;
+      videoEl.oncanplaythrough = res;
       videoEl.onerror = () => rej(new Error('Video load failed: ' + (videoEl.error?.message || '?')));
-      setTimeout(res, 8000);
+      setTimeout(res, 15000);
     });
 
     const vw  = videoEl.videoWidth  || 1280;
@@ -1230,9 +1214,16 @@ async function burnCaptions() {
         if (t === _lastT && !videoEl.paused) {
           if (++_stallTicks >= 2) {
             _stallTicks = 0;
+            console.warn('[burn stall]', {
+              currentTime: t,
+              readyState: videoEl.readyState,
+              networkState: videoEl.networkState,
+              bufferedEnd: videoEl.buffered.length ? videoEl.buffered.end(videoEl.buffered.length - 1) : 'none',
+              retry: _retries + 1
+            });
             if (++_retries >= 5) {
               clearInterval(stallWatchdog);
-              reject(new Error('Burn stalled — video may be too large for your browser. Try the Mac app for long videos.'));
+              reject(new Error('Burn stalled — the video stopped playing mid-burn. Try refreshing and burning again, or use the Mac app.'));
               return;
             }
             videoEl.play().catch(() => {});
