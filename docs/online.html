@@ -634,7 +634,7 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
   setProgress(65, 'Transcribing...');
   log('Running Whisper...' + (scriptHint ? ' (script hint active)' : ''));
 
-  const opts = { return_timestamps: 'word', chunk_length_s: 30, stride_length_s: 2 };
+  const opts = { return_timestamps: true, chunk_length_s: 30, stride_length_s: 2 };
   if (scriptHint) opts.initial_prompt = scriptHint.split(/[.!?]/)[0].trim() + '.';
 
   const result = await transcriber(audio, opts);
@@ -644,14 +644,14 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
 
   transcript = result.text;
   const rawChunks = result.chunks || [];
-  // Cap each word's end time to the next word's start — prevents the last word
-  // of each 30s Whisper chunk from getting its end inflated to the chunk boundary.
-  for (let i = 0; i < rawChunks.length - 1; i++) {
-    const [s, e] = rawChunks[i].timestamp || [0, 0];
-    const [ns]   = rawChunks[i + 1].timestamp || [e, e];
-    if (e > ns) rawChunks[i] = { ...rawChunks[i], timestamp: [s, ns] };
-  }
   segments = rechunkDynamic(rawChunks);
+  // Trim each segment's end to where the next one starts.
+  // Phrase-level timestamps from Whisper are reliable for starts but inflate
+  // ends to chunk boundaries — this keeps captions tight.
+  for (let i = 0; i < segments.length - 1; i++) {
+    const nextStart = segments[i + 1].timestamp[0];
+    if (segments[i].timestamp[1] > nextStart) segments[i].timestamp[1] = nextStart;
+  }
   showResult(transcript);
 }
 
