@@ -1221,14 +1221,26 @@ async function burnCaptions() {
       }
 
       // Stall watchdog: rVFC stops firing when the video element stalls.
-      // If currentTime hasn't advanced for 2s, force play() to recover.
-      let _lastT = -1, _stallTicks = 0;
+      // Every second, check if currentTime advanced. If stuck, try play().
+      // After 5 retries with no progress, abort with an error.
+      let _lastT = -1, _stallTicks = 0, _retries = 0;
       const stallWatchdog = setInterval(() => {
         if (videoEl.ended) { clearInterval(stallWatchdog); return; }
         const t = videoEl.currentTime;
         if (t === _lastT && !videoEl.paused) {
-          if (++_stallTicks >= 2) { videoEl.play().catch(() => {}); _stallTicks = 0; }
-        } else { _stallTicks = 0; }
+          if (++_stallTicks >= 2) {
+            _stallTicks = 0;
+            if (++_retries >= 5) {
+              clearInterval(stallWatchdog);
+              reject(new Error('Burn stalled — video may be too large for your browser. Try the Mac app for long videos.'));
+              return;
+            }
+            videoEl.play().catch(() => {});
+          }
+        } else {
+          _stallTicks = 0;
+          _retries = 0;
+        }
         _lastT = t;
       }, 1000);
 
