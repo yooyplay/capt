@@ -644,6 +644,13 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
 
   transcript = result.text;
   const rawChunks = result.chunks || [];
+  // Cap each word's end time to the next word's start — prevents the last word
+  // of each 30s Whisper chunk from getting its end inflated to the chunk boundary.
+  for (let i = 0; i < rawChunks.length - 1; i++) {
+    const [s, e] = rawChunks[i].timestamp || [0, 0];
+    const [ns]   = rawChunks[i + 1].timestamp || [e, e];
+    if (e > ns) rawChunks[i] = { ...rawChunks[i], timestamp: [s, ns] };
+  }
   segments = rechunkDynamic(rawChunks);
   showResult(transcript);
 }
