@@ -1204,6 +1204,7 @@ async function burnCaptions() {
 
       videoEl.onended = () => {
         clearInterval(tick);
+        clearInterval(stallWatchdog);
         if (rafId) cancelAnimationFrame(rafId);
         ctx.drawImage(videoEl, 0, 0, vw, vh);
         setTimeout(() => recorder.stop(), 400);
@@ -1212,16 +1213,24 @@ async function burnCaptions() {
       recorder.onerror = e => reject(e.error || e);
 
       // rVFC path: fires exactly once per decoded video frame — accurate subtitle timing
-      let _dbgFrames = 0;
       function onFrame(now, meta) {
         if (videoEl.ended) return;
-        if (_dbgFrames < 5 || _dbgFrames % 90 === 0)
-          console.log('[burn] frame', _dbgFrames, 'mediaTime', meta.mediaTime, 'seg:', JSON.stringify(getActiveSeg(meta.mediaTime)));
-        _dbgFrames++;
         ctx.drawImage(videoEl, 0, 0, vw, vh);
-        drawSubtitle(meta.mediaTime); // exact frame presentation time, no currentTime lag
+        drawSubtitle(meta.mediaTime);
         videoEl.requestVideoFrameCallback(onFrame);
       }
+
+      // Stall watchdog: rVFC stops firing when the video element stalls.
+      // If currentTime hasn't advanced for 2s, force play() to recover.
+      let _lastT = -1, _stallTicks = 0;
+      const stallWatchdog = setInterval(() => {
+        if (videoEl.ended) { clearInterval(stallWatchdog); return; }
+        const t = videoEl.currentTime;
+        if (t === _lastT && !videoEl.paused) {
+          if (++_stallTicks >= 2) { videoEl.play().catch(() => {}); _stallTicks = 0; }
+        } else { _stallTicks = 0; }
+        _lastT = t;
+      }, 1000);
 
       // RAF fallback for browsers without rVFC (Firefox)
       let lastT = -1, stuckFrames = 0;
