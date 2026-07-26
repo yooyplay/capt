@@ -1212,8 +1212,12 @@ async function burnCaptions() {
       recorder.onerror = e => reject(e.error || e);
 
       // rVFC path: fires exactly once per decoded video frame — accurate subtitle timing
+      let _dbgFrames = 0;
       function onFrame(now, meta) {
         if (videoEl.ended) return;
+        if (_dbgFrames < 5 || _dbgFrames % 90 === 0)
+          console.log('[burn] frame', _dbgFrames, 'mediaTime', meta.mediaTime, 'seg:', JSON.stringify(getActiveSeg(meta.mediaTime)));
+        _dbgFrames++;
         ctx.drawImage(videoEl, 0, 0, vw, vh);
         drawSubtitle(meta.mediaTime); // exact frame presentation time, no currentTime lag
         videoEl.requestVideoFrameCallback(onFrame);
