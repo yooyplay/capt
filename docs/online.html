@@ -644,9 +644,7 @@ async function runWhisper(audio, scriptHint, log, setProgress) {
 
   transcript = result.text;
   const rawChunks = result.chunks || [];
-  console.log('[capt] rawChunks count:', rawChunks.length, 'first 3:', JSON.stringify(rawChunks.slice(0,3)));
   segments = rechunkDynamic(rawChunks);
-  console.log('[capt] segments count:', segments.length, 'first 3:', JSON.stringify(segments.slice(0,3)));
   // Trim each segment's end to where the next one starts.
   // Phrase-level timestamps from Whisper are reliable for starts but inflate
   // ends to chunk boundaries — this keeps captions tight.
