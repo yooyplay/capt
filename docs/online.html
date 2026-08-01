@@ -313,8 +313,11 @@
 
   <!-- Result -->
   <div id="resultWrap" style="display:none;margin-top:20px;">
-    <h3 style="font-size:1rem;font-weight:700;margin-bottom:12px;">Transcript</h3>
-    <div id="transcriptBox" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;font-size:.88rem;color:var(--muted);line-height:1.7;max-height:300px;overflow-y:auto;white-space:pre-wrap;"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <h3 style="font-size:1rem;font-weight:700;margin:0;">Transcript</h3>
+      <span style="font-size:.75rem;color:var(--muted);">Click any line to edit</span>
+    </div>
+    <div id="transcriptBox" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:8px;font-size:.88rem;max-height:320px;overflow-y:auto;"></div>
     <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
       <button class="btn btn-primary" id="burnBtn" onclick="burnCaptions()" style="font-size:13px;padding:10px 20px;">Download video with captions</button>
       <button class="btn btn-secondary" onclick="resetTool()" style="font-size:13px;padding:10px 20px;">Caption another</button>
@@ -995,12 +998,55 @@ function rechunkDynamic(chunks, targetDuration = 2.5, maxWords = 10) {
 }
 
 // ── Output helpers ────────────────────────────────────────────────────────────
+function fmtTime(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return m + ':' + String(sec).padStart(2, '0');
+}
+
 function showResult(text) {
-  document.getElementById('transcriptBox').textContent = text;
+  const box = document.getElementById('transcriptBox');
+  box.innerHTML = '';
+  if (segments && segments.length) {
+    segments.forEach((seg, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:6px 8px;border-radius:6px;transition:background .1s;';
+      row.onmouseenter = () => row.style.background = 'rgba(255,255,255,0.04)';
+      row.onmouseleave = () => row.style.background = '';
+
+      const time = document.createElement('span');
+      time.textContent = fmtTime(seg.timestamp[0]);
+      time.style.cssText = 'flex-shrink:0;font-size:.72rem;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:2px;min-width:32px;';
+
+      const txt = document.createElement('span');
+      txt.contentEditable = 'true';
+      txt.dataset.idx = i;
+      txt.textContent = seg.text.trim();
+      txt.style.cssText = 'flex:1;outline:none;line-height:1.6;color:var(--text);word-break:break-word;';
+      txt.onfocus = () => { row.style.background = 'rgba(168,85,247,0.08)'; row.style.outline = '1px solid rgba(168,85,247,0.3)'; };
+      txt.onblur  = () => { row.style.background = ''; row.style.outline = ''; };
+
+      row.appendChild(time);
+      row.appendChild(txt);
+      box.appendChild(row);
+    });
+  } else {
+    box.style.padding = '16px';
+    box.style.color = 'var(--muted)';
+    box.style.whiteSpace = 'pre-wrap';
+    box.textContent = text;
+  }
   document.getElementById('resultWrap').style.display = 'block';
   document.getElementById('progressWrap').classList.remove('visible');
   document.getElementById('dropSub').textContent = 'Done! Drop another file to start over.';
-  updatePreview(); // refresh preview sample text with real transcript
+  updatePreview();
+}
+
+function applyTranscriptEdits() {
+  if (!segments) return;
+  document.querySelectorAll('#transcriptBox [data-idx]').forEach(el => {
+    const i = parseInt(el.dataset.idx);
+    if (segments[i]) segments[i].text = el.textContent.trim();
+  });
 }
 
 
@@ -1052,6 +1098,7 @@ async function burnCaptions() {
   burnLogEl.style.display = 'none';
 
   try {
+    applyTranscriptEdits();
     syncStyleFromUI();
 
     const fontFamily = 'Arial';
